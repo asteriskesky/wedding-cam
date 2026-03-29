@@ -27,8 +27,8 @@
 
     <link rel="canonical" href="https://zawa-rayyan-wedding.vercel.app" />
     <link rel="manifest" href="manifest.json" />
-    <link rel="shortcut icon" href="assets/logo.png" type="image/png" />
-    <link rel="apple-touch-icon" href="assets/logo.png" />
+    <link rel="icon" href="assets/favicon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="assets/favicon.svg" />
     <link rel="mask-icon" href="assets/zr_logo.svg" color="#B8942A" />
 
     <!-- Google Fonts -->
@@ -182,13 +182,7 @@
                 <img src="assets/zr_text.svg" alt="ZR" class="header-logo-img" />
             </div>
             <div style="display:flex;gap:10px;align-items:center">
-                <button class="header-btn" id="btn-flash" onclick="toggleFlash()" aria-label="Flash"
-                    style="display:none">
-                    <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
-                        <path d="M11 2L4 11h7l-2 7 9-10h-7l2-6z" stroke="currentColor" stroke-width="1.5"
-                            stroke-linejoin="round" />
-                    </svg>
-                </button>
+                <!-- Flash moved to bottom strip -->
                 <button class="header-btn avatar-btn" id="header-avatar" onclick="showProfile()" aria-label="Profile">
                     <span id="header-avatar-emoji">👤</span>
                 </button>
@@ -201,6 +195,10 @@
             <video id="camera-feed" autoplay playsinline muted class="camera-feed"></video>
             <!-- For gallery / captured preview -->
             <img id="preview-image" class="preview-image hidden" alt="Preview" />
+            <!-- Portrait mode blur overlay -->
+            <div id="portrait-overlay" class="portrait-overlay"></div>
+            <!-- Vignette overlay -->
+            <div id="vignette-overlay" class="vignette-overlay"></div>
 
             <!-- Event label overlay -->
             <div class="event-overlay" id="event-overlay">
@@ -222,75 +220,152 @@
         </div>
 
         <!-- Right-edge Controls (Camera / Gallery toggle) -->
-        <div class="side-controls" id="side-controls">
-            <button class="side-btn active" id="btn-cam-mode" onclick="setMode('camera')" aria-label="Camera mode">
-                <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
-                    <rect x="2" y="6" width="20" height="14" rx="3" stroke="currentColor" stroke-width="1.8" />
-                    <circle cx="12" cy="13" r="4" stroke="currentColor" stroke-width="1.8" />
-                    <path d="M9 6V5a1 1 0 011-1h4a1 1 0 011 1v1" stroke="currentColor" stroke-width="1.8" />
-                </svg>
-                <span>CAMERA</span>
-            </button>
-            <div class="side-divider"></div>
-            <button class="side-btn" id="btn-gal-mode" onclick="setMode('gallery')" aria-label="Gallery mode">
-                <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
-                    <rect x="3" y="3" width="18" height="18" rx="3" stroke="currentColor" stroke-width="1.8" />
-                    <circle cx="8.5" cy="8.5" r="1.5" fill="currentColor" />
-                    <path d="M3 15l5-5 4 4 3-3 6 5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"
-                        stroke-linejoin="round" />
-                </svg>
-                <span>GALLERY</span>
-            </button>
-            <!-- Flip camera -->
-            <button class="side-btn-sm" id="btn-flip" onclick="flipCamera()" aria-label="Flip camera">
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
-                    <path d="M20 7H4m0 0l3-3M4 7l3 3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"
-                        stroke-linejoin="round" />
-                    <path d="M4 17h16m0 0l-3 3m3-3l-3-3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"
-                        stroke-linejoin="round" />
-                </svg>
-            </button>
-        </div>
-
-        <!-- Capture / Upload Button -->
-        <div class="capture-wrap">
-            <div id="recording-indicator" class="recording-indicator">
-                <div class="recording-dot"></div>
-                <span id="recording-timer">REC 00:00</span>
+        <div class="side-controls-container" id="side-controls-container">
+            <div class="side-mode-strip">
+                <button class="side-btn active" id="btn-cam-mode" onclick="setMode('camera')" aria-label="Camera mode">
+                    <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
+                        <rect x="2" y="6" width="20" height="14" rx="3" stroke="currentColor" stroke-width="1.8" />
+                        <circle cx="12" cy="13" r="4" stroke="currentColor" stroke-width="1.8" />
+                        <path d="M9 6V5a1 1 0 011-1h4a1 1 0 011 1v1" stroke="currentColor" stroke-width="1.8" />
+                    </svg>
+                    <span>CAMERA</span>
+                </button>
+                <button class="side-btn" id="btn-gal-mode" onclick="setMode('gallery')" aria-label="Gallery mode">
+                    <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
+                        <rect x="3" y="3" width="18" height="18" rx="3" stroke="currentColor" stroke-width="1.8" />
+                        <circle cx="8.5" cy="8.5" r="1.5" fill="currentColor" />
+                        <path d="M3 15l5-5 4 4 3-3 6 5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"
+                            stroke-linejoin="round" />
+                    </svg>
+                    <span>GALLERY</span>
+                </button>
             </div>
-            <button class="capture-btn" id="capture-btn" aria-label="Capture">
-                <svg width="42" height="42" viewBox="0 0 36 36" fill="none">
-                    <circle cx="18" cy="18" r="14" stroke="#fff" stroke-width="2" fill="none" opacity="0.3" />
-                    <path d="M18 11v4M18 21v4M11 18h4M21 18h4M13.8 13.8l2.2 2.2M20 20l2.2 2.2" stroke="#fff"
-                        stroke-width="2.5" stroke-linecap="round" />
-                </svg>
+            <!-- Effects Settings Button (Floating) -->
+            <button class="side-action-btn" id="btn-camera-options" onclick="toggleCameraOptions()"
+                aria-label="Camera options" style="margin-top: 10px; width: 52px; height: 52px;">
+                <span class="material-symbols-rounded">tune</span>
             </button>
-
-            <!-- Hidden file input for gallery -->
-            <input type="file" id="gallery-input" accept="image/*,video/*" style="display:none"
-                onchange="handleGalleryFile(event)" multiple />
         </div>
 
-        <!-- Bottom Tab Bar -->
-        <nav class="tab-bar" id="tab-bar">
-            <button class="tab" id="tab-retro" onclick="selectTab('retro')" aria-label="Retro">
-                <span class="material-symbols-outlined tab-icon"
-                    style="font-variation-settings:'FILL' 1">auto_awesome</span>
-                <span>Retro</span>
-            </button>
-            <button class="tab" id="tab-mehendi" onclick="selectTab('mehendi')" aria-label="Mehendi">
-                <span class="material-symbols-outlined tab-icon">local_florist</span>
-                <span>Mehendi</span>
-            </button>
-            <button class="tab" id="tab-nikah" onclick="selectTab('nikah')" aria-label="Nikah">
-                <span class="material-symbols-outlined tab-icon">favorite</span>
-                <span>Nikah</span>
-            </button>
-            <button class="tab" id="tab-explore" onclick="showExplore()" aria-label="Explore">
-                <span class="material-symbols-outlined tab-icon">explore</span>
-                <span>Explore</span>
-            </button>
-        </nav>
+
+
+        <!-- Recording timer moved to top -->
+        <div id="recording-indicator" class="recording-indicator">
+            <div class="recording-dot"></div>
+            <span id="recording-timer">REC 00:00</span>
+            <div class="size-progress-wrap">
+                <svg class="size-progress-svg" width="32" height="32">
+                    <circle class="size-progress-bg" cx="16" cy="16" r="14" />
+                    <circle id="size-progress-bar" class="size-progress-bar" cx="16" cy="16" r="14"
+                        style="stroke-dasharray: 88; stroke-dashoffset: 88;" />
+                </svg>
+                <div class="size-progress-icon">
+                    <span id="size-icon-cloud" class="material-symbols-rounded">cloud_upload</span>
+                    <span id="size-icon-phone" class="material-symbols-rounded hidden">phone_iphone</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Capture Area Controls -->
+        <div class="capture-wrap">
+            <div class="capture-row">
+                <!-- Flash Button -->
+                <button class="side-action-btn" id="btn-flash" onclick="toggleFlash()" aria-label="Flash"
+                    style="display:none">
+                    <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+                        <path d="M11 2L4 11h7l-2 7 9-10h-7l2-6z" stroke="currentColor" stroke-width="1.5"
+                            stroke-linejoin="round" />
+                    </svg>
+                </button>
+
+                <!-- Main Capture Button -->
+                <button class="capture-btn" id="capture-btn" aria-label="Capture">
+                    <svg width="42" height="42" viewBox="0 0 36 36" fill="none">
+                        <circle cx="18" cy="18" r="14" stroke="#fff" stroke-width="2" fill="none" opacity="0.3" />
+                        <path d="M18 11v4M18 21v4M11 18h4M21 18h4M13.8 13.8l2.2 2.2M20 20l2.2 2.2" stroke="#fff"
+                            stroke-width="2.5" stroke-linecap="round" />
+                    </svg>
+                </button>
+
+
+                <!-- Flip Camera Button -->
+                <button class="side-action-btn" id="btn-flip" onclick="flipCamera()" aria-label="Flip camera">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+                        <path d="M20 7H4m0 0l3-3M4 7l3 3" stroke="currentColor" stroke-width="1.8"
+                            stroke-linecap="round" stroke-linejoin="round" />
+                        <path d="M4 17h16m0 0l-3 3m3-3l-3-3" stroke="currentColor" stroke-width="1.8"
+                            stroke-linecap="round" stroke-linejoin="round" />
+                    </svg>
+                </button>
+            </div>
+        </div>
+
+        <!-- Advanced Camera Options Panel -->
+        <div id="camera-options-panel" class="camera-options-panel hidden">
+            <div class="options-header">
+                <span>Camera Settings</span>
+                <button class="options-close" onclick="toggleCameraOptions()">✕</button>
+            </div>
+
+            <div class="option-row">
+                <label>Aperture (Blur)</label>
+                <input type="range" id="input-aperture" min="0" max="10" step="0.5" value="0"
+                    oninput="updateCameraFilter()" />
+            </div>
+
+            <div class="option-row">
+                <label>Brightness</label>
+                <input type="range" id="input-brightness" min="0.5" max="2.0" step="0.1" value="1.0"
+                    oninput="updateCameraFilter()" />
+            </div>
+
+            <div class="option-row-grid">
+                <button class="option-pills" id="btn-portrait" onclick="togglePortraitMode()">
+                    <span class="material-symbols-rounded">portrait</span> <span>Portrait</span>
+                </button>
+                <button class="option-pills" id="btn-retro-filter" onclick="toggleRetroFilter()">
+                    <span class="material-symbols-rounded">history</span> <span>Nostalgia</span>
+                </button>
+                <button class="option-pills" id="btn-bw-filter" onclick="toggleBWFilter()">
+                    <span class="material-symbols-rounded">filter_b_and_w</span> <span>Monochrome</span>
+                </button>
+                <button class="option-pills" id="btn-vignette" onclick="toggleVignette()">
+                    <span class="material-symbols-rounded">brightness_auto</span> <span>Vignette</span>
+                </button>
+                <button class="option-pills" id="btn-lowlight" onclick="toggleLowLight()">
+                    <span class="material-symbols-rounded">nights_stay</span> <span>Night</span>
+                </button>
+                <button class="option-pills" id="btn-reset-filters" onclick="resetCameraFilters()">
+                    <span class="material-symbols-rounded">restart_alt</span> <span>Reset</span>
+                </button>
+            </div>
+        </div>
+
+        <!-- Hidden file input for gallery -->
+        <input type="file" id="gallery-input" accept="image/*,video/*" style="display:none"
+            onchange="handleGalleryFile(event)" multiple />
+    </div>
+
+    <!-- Bottom Tab Bar -->
+    <nav class="tab-bar" id="tab-bar">
+        <button class="tab" id="tab-retro" onclick="selectTab('retro')" aria-label="Retro">
+            <span class="material-symbols-outlined tab-icon"
+                style="font-variation-settings:'FILL' 1">auto_awesome</span>
+            <span>Retro</span>
+        </button>
+        <button class="tab" id="tab-mehendi" onclick="selectTab('mehendi')" aria-label="Mehendi">
+            <span class="material-symbols-outlined tab-icon">local_florist</span>
+            <span>Mehendi</span>
+        </button>
+        <button class="tab" id="tab-nikah" onclick="selectTab('nikah')" aria-label="Nikah">
+            <span class="material-symbols-outlined tab-icon">favorite</span>
+            <span>Nikah</span>
+        </button>
+        <button class="tab" id="tab-explore" onclick="showExplore()" aria-label="Explore">
+            <span class="material-symbols-outlined tab-icon">explore</span>
+            <span>Explore</span>
+        </button>
+    </nav>
     </div>
 
     <!-- EXPLORE GALLERY -->

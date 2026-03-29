@@ -86,6 +86,7 @@ let state = {
   isRecording: false,
   mediaRecorder: null,
   recordedChunks: [],
+  recordedSize: 0,
   recordingStartTime: null,
   recordingTimer: null,
   photos: [],                // normalised [{id, srcUrl, guestName, guestAvatar, event, type, ts}]
@@ -96,6 +97,16 @@ let state = {
   selectedIds: new Set(),
   lightboxPhoto: null,
   pendingBatch: [],
+  // Camera Filters
+  filters: {
+    aperture: 0,
+    brightness: 1,
+    portrait: false,
+    retro: false,
+    monochrome: false,
+    vignette: false,
+    lowlight: false
+  }
 };
 
 // AVATAR PICKER
@@ -284,13 +295,97 @@ async function flipCamera() {
 
 function toggleFlash() {
   state.flashEnabled = !state.flashEnabled;
-  document.getElementById('btn-flash').style.opacity = state.flashEnabled ? '1' : '0.5';
+  const btn = document.getElementById('btn-flash');
+  btn.classList.toggle('active', state.flashEnabled);
+  btn.style.opacity = state.flashEnabled ? '1' : '0.5';
   if (state.cameraStream) {
     const track = state.cameraStream.getVideoTracks()[0];
     if (track?.getCapabilities?.().torch) {
       track.applyConstraints({ advanced: [{ torch: state.flashEnabled }] });
     }
   }
+}
+
+// ADVANCED CAMERA OPTIONS
+function toggleCameraOptions() {
+  const panel = document.getElementById('camera-options-panel');
+  panel.classList.toggle('hidden');
+}
+
+function updateCameraFilter() {
+  const aperture = document.getElementById('input-aperture').value;
+  const brightness = document.getElementById('input-brightness').value;
+  state.filters.aperture = parseFloat(aperture);
+  state.filters.brightness = parseFloat(brightness);
+
+  const video = document.getElementById('camera-feed');
+  let filterStr = `brightness(${state.filters.brightness}) blur(${state.filters.aperture}px)`;
+
+  if (state.filters.retro) {
+    filterStr += ` sepia(0.3) contrast(1.1) saturate(0.9)`;
+  }
+
+  if (state.filters.monochrome) {
+    filterStr += ` grayscale(1) contrast(1.1)`;
+  }
+
+  if (state.filters.lowlight) {
+    filterStr += ` brightness(1.4) contrast(0.8) saturate(1.2)`;
+  }
+
+  video.style.filter = filterStr;
+}
+
+function togglePortraitMode() {
+  state.filters.portrait = !state.filters.portrait;
+  const btn = document.getElementById('btn-portrait');
+  const container = document.getElementById('camera-area');
+
+  btn.classList.toggle('active', state.filters.portrait);
+  container.classList.toggle('portrait-mode-active', state.filters.portrait);
+}
+
+function toggleRetroFilter() {
+  state.filters.retro = !state.filters.retro;
+  const btn = document.getElementById('btn-retro-filter');
+  btn.classList.toggle('active', state.filters.retro);
+  updateCameraFilter();
+}
+
+function toggleBWFilter() {
+  state.filters.monochrome = !state.filters.monochrome;
+  const btn = document.getElementById('btn-bw-filter');
+  btn.classList.toggle('active', state.filters.monochrome);
+  updateCameraFilter();
+}
+
+function toggleVignette() {
+  state.filters.vignette = !state.filters.vignette;
+  const btn = document.getElementById('btn-vignette');
+  const container = document.getElementById('camera-area');
+  btn.classList.toggle('active', state.filters.vignette);
+  container.classList.toggle('vignette-active', state.filters.vignette);
+}
+
+function toggleLowLight() {
+  state.filters.lowlight = !state.filters.lowlight;
+  const btn = document.getElementById('btn-lowlight');
+  btn.classList.toggle('active', state.filters.lowlight);
+  updateCameraFilter();
+}
+
+function resetCameraFilters() {
+  state.filters = { aperture: 0, brightness: 1, portrait: false, retro: false, monochrome: false, vignette: false, lowlight: false };
+
+  document.getElementById('input-aperture').value = 0;
+  document.getElementById('input-brightness').value = 1;
+  document.querySelectorAll('.option-pills').forEach(b => b.classList.remove('active'));
+
+  document.getElementById('camera-area').classList.remove('portrait-mode-active');
+  document.getElementById('camera-area').classList.remove('vignette-active');
+
+  updateCameraFilter();
+  showToast('✦ Filters reset');
 }
 
 // MODE SWITCHING
@@ -516,8 +611,73 @@ async function capturePhoto() {
     canvas.width = video.videoWidth || 1280;
     canvas.height = video.videoHeight || 720;
     const ctx = canvas.getContext('2d');
+
+    // Apply Filters (Brightness, Aperture/Blur, Retro, Monochrome)
+    let filters = [];
+    if (state.filters.brightness !== 1) filters.push(`brightness(${state.filters.brightness})`);
+    if (state.filters.aperture > 0) filters.push(`blur(${state.filters.aperture}px)`);
+    if (state.filters.retro) filters.push(`sepia(0.3) contrast(1.1) saturate(0.9)`);
+    if (state.filters.monochrome) filters.push(`grayscale(1) contrast(1.1)`);
+    if (state.filters.lowlight) filters.push(`brightness(1.4) contrast(0.8) saturate(1.2)`);
+
+    if (filters.length > 0) ctx.filter = filters.join(' ');
+
     if (state.facingMode === 'user') { ctx.translate(canvas.width, 0); ctx.scale(-1, 1); }
-    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+    if (state.filters.portrait) {
+      // Draw sharp base
+      const tempCanvas = document.createElement('canvas');
+      tempCanvas.width = canvas.width;
+      tempCanvas.height = canvas.height;
+      const tctx = tempCanvas.getContext('2d');
+      tctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+      // Draw blurred version on main canvas
+      ctx.save();
+      ctx.filter = (ctx.filter !== 'none' ? ctx.filter + ' ' : '') + 'blur(12px)';
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      ctx.restore();
+
+      // Mask out the center of the blurred version to reveal sharp version
+      const maskCanvas = document.createElement('canvas');
+      maskCanvas.width = canvas.width;
+      maskCanvas.height = canvas.height;
+      const mctx = maskCanvas.getContext('2d');
+      const grad = mctx.createRadialGradient(
+        canvas.width * 0.5, canvas.height * 0.45, 0,
+        canvas.width * 0.5, canvas.height * 0.45, canvas.height * 0.7
+      );
+      grad.addColorStop(0.15, 'rgba(0,0,0,1)');
+      grad.addColorStop(0.65, 'rgba(0,0,0,0)');
+      mctx.fillStyle = grad;
+      mctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      const sharpPart = document.createElement('canvas');
+      sharpPart.width = canvas.width;
+      sharpPart.height = canvas.height;
+      const sctx = sharpPart.getContext('2d');
+      sctx.drawImage(tempCanvas, 0, 0);
+      sctx.globalCompositeOperation = 'destination-in';
+      sctx.drawImage(maskCanvas, 0, 0);
+
+      ctx.globalCompositeOperation = 'source-over';
+      ctx.drawImage(sharpPart, 0, 0);
+    } else {
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    }
+
+    if (state.filters.vignette) {
+      const vGrad = ctx.createRadialGradient(
+        canvas.width / 2, canvas.height / 2, 0,
+        canvas.width / 2, canvas.height / 2, canvas.height * 0.9
+      );
+      vGrad.addColorStop(0, 'rgba(0,0,0,0)');
+      vGrad.addColorStop(0.7, 'rgba(0,0,0,0)');
+      vGrad.addColorStop(1, 'rgba(0,0,0,0.5)');
+      ctx.fillStyle = vGrad;
+      ctx.globalCompositeOperation = 'source-over';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+    }
     flashScreen();
     dataUrl = canvas.toDataURL('image/jpeg', 0.88);
     type = 'photo';
@@ -606,6 +766,8 @@ async function startRecording() {
 
   try {
     state.recordedChunks = [];
+    state.recordedSize = 0;
+    updateSizeProgress(0); // Reset UI
     const mimeType = MediaRecorder.isTypeSupported('video/webm;codecs=vp9')
       ? 'video/webm;codecs=vp9'
       : 'video/webm';
@@ -613,13 +775,23 @@ async function startRecording() {
     state.mediaRecorder = new MediaRecorder(state.cameraStream, { mimeType });
 
     state.mediaRecorder.ondataavailable = (e) => {
-      if (e.data.size > 0) state.recordedChunks.push(e.data);
+      if (e.data.size > 0) {
+        state.recordedChunks.push(e.data);
+        state.recordedSize += e.data.size;
+        updateSizeProgress(state.recordedSize);
+      }
     };
 
     state.mediaRecorder.onstop = async () => {
       const blob = new Blob(state.recordedChunks, { type: 'video/webm' });
-      // Pass the blob directly to avoid large base64 strings
-      processCapturedMedia(null, 'video', blob);
+
+      if (state.recordedSize > LIMITS.video) {
+        // Handle oversized recording
+        triggerLocalSave(blob);
+      } else {
+        // Normal upload
+        processCapturedMedia(null, 'video', blob);
+      }
     };
 
     state.mediaRecorder.start();
@@ -627,6 +799,7 @@ async function startRecording() {
     state.recordingStartTime = Date.now();
 
     // UI Updates
+    document.body.classList.add('is-recording');
     const btn = document.getElementById('capture-btn');
     btn.classList.add('recording');
     document.getElementById('recording-indicator').classList.add('active');
@@ -650,7 +823,9 @@ function stopRecording() {
 
   clearInterval(state.recordingTimer);
   document.getElementById('recording-timer').textContent = 'REC 00:00';
+  updateSizeProgress(0); // Reset UI for next time
 
+  document.body.classList.remove('is-recording');
   const btn = document.getElementById('capture-btn');
   btn.classList.remove('recording');
   document.getElementById('recording-indicator').classList.remove('active');
@@ -664,8 +839,75 @@ function updateRecordingTimer() {
   const s = (elapsed % 60).toString().padStart(2, '0');
   document.getElementById('recording-timer').textContent = `REC ${m}:${s}`;
 
-  // Auto stop at 15s to prevent massive uploads (Cloudinary limit is 100MB for free, but let's be safe)
-  if (elapsed >= 15) stopRecording();
+  // Removed 15s limit as per user request — let them record!
+}
+
+function updateSizeProgress(bytes) {
+  const limit = LIMITS.video; // 100MB
+  const percent = Math.min(100, (bytes / limit) * 100);
+  const isOver = bytes > limit;
+
+  // Update ring
+  const circle = document.getElementById('size-progress-bar');
+  if (circle) {
+    const radius = 14;
+    const circumference = 2 * Math.PI * radius; // ~88
+    const offset = circumference - (percent / 100) * circumference;
+    circle.style.strokeDashoffset = offset;
+    circle.classList.toggle('limit-reached', isOver);
+  }
+
+  // Update icons
+  const cloud = document.getElementById('size-icon-cloud');
+  const phone = document.getElementById('size-icon-phone');
+  if (cloud && phone) {
+    if (isOver) {
+      cloud.classList.add('hidden');
+      phone.classList.remove('hidden');
+      phone.classList.add('limit-reached');
+    } else {
+      cloud.classList.remove('hidden');
+      phone.classList.add('hidden');
+    }
+  }
+}
+
+function triggerLocalSave(blob) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `wedding_video_large_${Date.now()}.webm`;
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => {
+    document.body.removeChild(a);
+    window.URL.revokeObjectURL(url);
+  }, 100);
+
+  // Notify user
+  showOversizeNotification();
+}
+
+function showOversizeNotification() {
+  // Use a custom alert or reuse toast with longer duration
+  const msg = "That was a big moment! It’s too large (100MB+) to upload directly. Saved it to phone storage. You can upload it later from gallery";
+
+  // Custom styled alert for this "big" notification
+  const overlay = document.createElement('div');
+  overlay.className = 'modal active';
+  overlay.style.zIndex = '2000';
+  overlay.innerHTML = `
+    <div class="modal-backdrop" onclick="this.parentElement.remove()"></div>
+    <div class="modal-content" style="text-align:center; padding: 24px;">
+      <div class="modal-icon" style="background: rgba(184, 148, 42, 0.1); color: var(--gold); margin-bottom: 16px;">
+        <span class="material-symbols-rounded">phone_iphone</span>
+      </div>
+      <h3 class="modal-title">Moment Saved!</h3>
+      <p class="modal-text" style="font-size: 14px; line-height: 1.6;">${msg}</p>
+      <button class="btn-gold" style="margin-top: 20px;" onclick="this.closest('.modal').remove()">Got it!</button>
+    </div>
+  `;
+  document.body.appendChild(overlay);
 }
 
 function flashScreen() {
