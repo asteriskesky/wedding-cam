@@ -1389,8 +1389,6 @@ async function handleAuthStateChange(user) {
 async function loginWithGoogle() {
   try {
     const provider = new firebase.auth.GoogleAuthProvider();
-    // Always use popup — redirect causes a page reload which triggers
-    // double auth state changes and breaks the loading flow on mobile.
     await fbAuth.signInWithPopup(provider);
   } catch (err) {
     console.error('Google login failed:', err);
@@ -1451,6 +1449,16 @@ async function loginAnonymously() {
     console.error('Anon login failed:', err);
     showToast('Login failed — try refresh');
   }
+}
+
+// Signs the user out and returns to the auth choice screen.
+// Used by the "Back to options" link on step-name (shown after
+// Google / Guest auth when the user hasn't set a name yet).
+async function backToAuthOptions() {
+  try {
+    await fbAuth.signOut();
+  } catch (e) { /* ignore */ }
+  showStep('step-auth-choice');
 }
 
 
