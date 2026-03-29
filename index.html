@@ -639,17 +639,34 @@
             </div>
             <div class="menu-avatar" id="menu-avatar-emoji">👤</div>
             <div class="menu-name" id="menu-name-display">Guest</div>
-            <div class="menu-sub">Grateful for your presence and for every memory you've clicked for us! ✨</div>
-            <div class="menu-divider"></div>
-            <button class="menu-item" onclick="toggleMenu();showExplore()">
-                <span class="material-symbols-outlined" style="font-size:18px">explore</span>
-                Explore Gallery
-            </button>
+            <div class="menu-sub">Grateful for your presence and every<br />memory you've clicked for us! ✨</div>
+            <div class="menu-items">
+                <button class="btn-gold menu-explore-btn" onclick="toggleMenu();showExplore()">
+                    <span class="material-symbols-outlined" style="font-size:18px">explore</span>
+                    Explore Gallery
+                </button>
+            </div>
 
-            <button class="menu-item danger" onclick="toggleMenu();resetUser()">
-                <span class="material-symbols-outlined" style="font-size:18px">logout</span>
-                Change Profile
-            </button>
+            <div class="menu-preferences">
+                <div class="pref-label">Preferences</div>
+                <div class="pref-item">
+                    <div class="pref-info">
+                        <div class="pref-title">Auto-save to phone</div>
+                        <div class="pref-desc">Save a copy to your device on capture</div>
+                    </div>
+                    <label class="switch">
+                        <input type="checkbox" id="pref-autosave" onchange="saveAppPreferences()">
+                        <span class="slider round"></span>
+                    </label>
+                </div>
+            </div>
+
+            <div class="menu-footer">
+                <button class="menu-item danger" onclick="toggleMenu();resetUser()">
+                    <span class="material-symbols-outlined" style="font-size:18px">logout</span>
+                    Logout
+                </button>
+            </div>
         </div>
     </div>
     <!-- ============================

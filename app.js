@@ -24,6 +24,99 @@ const CONFIG = {
   },
 };
 
+// ── INDEXED_DB (Ghost Backup) ──────────────────────────────
+const IDB_NAME = 'WeddingGhostBackup';
+const IDB_VERSION = 1;
+const STORE_NAME = 'media';
+
+const dbPromise = new Promise((resolve, reject) => {
+  const request = indexedDB.open(IDB_NAME, IDB_VERSION);
+  request.onupgradeneeded = (e) => {
+    const db = e.target.result;
+    if (!db.objectStoreNames.contains(STORE_NAME)) {
+      db.createObjectStore(STORE_NAME, { keyPath: 'id' });
+    }
+  };
+  request.onsuccess = (e) => resolve(e.target.result);
+  request.onerror = (e) => reject(e.target.error);
+});
+
+async function saveToGhostBackup(photo) {
+  try {
+    const db = await dbPromise;
+    const tx = db.transaction(STORE_NAME, 'readwrite');
+    const store = tx.objectStore(STORE_NAME);
+    // We store the full photo object including blob
+    await store.put({
+      ...photo,
+      synced: false,
+      ts: photo.ts || Date.now()
+    });
+    return true;
+  } catch (err) {
+    console.warn('Ghost Backup failed:', err);
+    return false;
+  }
+}
+
+async function markAsSynced(id) {
+  try {
+    const db = await dbPromise;
+    const tx = db.transaction(STORE_NAME, 'readwrite');
+    const store = tx.objectStore(STORE_NAME);
+    const item = await new Promise((res, rej) => {
+      const g = store.get(id);
+      g.onsuccess = () => res(g.result);
+      g.onerror = () => rej(g.error);
+    });
+    if (item) {
+      item.synced = true;
+      await store.put(item);
+    }
+  } catch (err) { console.warn('Sync marking failed:', err); }
+}
+
+async function getUnsyncedMedia() {
+  try {
+    const db = await dbPromise;
+    const tx = db.transaction(STORE_NAME, 'readonly');
+    const store = tx.objectStore(STORE_NAME);
+    return new Promise((res) => {
+      const items = [];
+      store.openCursor().onsuccess = (e) => {
+        const cursor = e.target.result;
+        if (cursor) {
+          if (!cursor.value.synced) items.push(cursor.value);
+          cursor.continue();
+        } else {
+          res(items);
+        }
+      };
+    });
+  } catch (err) { return []; }
+}
+
+async function cleanupOldBackups() {
+  // Keep only last 48 hours of synced backups to save guest space
+  try {
+    const db = await dbPromise;
+    const tx = db.transaction(STORE_NAME, 'readwrite');
+    const store = tx.objectStore(STORE_NAME);
+    const now = Date.now();
+    const expiry = 48 * 60 * 60 * 1000;
+
+    store.openCursor().onsuccess = (e) => {
+      const cursor = e.target.result;
+      if (cursor) {
+        if (cursor.value.synced && (now - cursor.value.ts > expiry)) {
+          cursor.delete();
+        }
+        cursor.continue();
+      }
+    };
+  } catch (e) { }
+}
+
 // UTILITIES
 
 /**
@@ -106,6 +199,9 @@ let state = {
     monochrome: false,
     vignette: false,
     lowlight: false
+  },
+  prefs: {
+    autosave: false
   }
 };
 
@@ -167,6 +263,7 @@ async function enterApp() {
   updateHeaderAvatar();
   showScreen('screen-app');
   selectTab(getDefaultEvent());
+  loadAppPreferences();
   startCamera();
 }
 
@@ -216,6 +313,23 @@ async function updateLastSeen() {
   } catch { }
 }
 
+// ── Preferences (App Settings) ────────────────────────────
+function saveAppPreferences() {
+  state.prefs.autosave = document.getElementById('pref-autosave').checked;
+  localStorage.setItem('wedding_prefs', JSON.stringify(state.prefs));
+  if (state.prefs.autosave) showToast('✦ Auto-save enabled');
+}
+
+function loadAppPreferences() {
+  try {
+    const raw = localStorage.getItem('wedding_prefs');
+    if (raw) {
+      state.prefs = JSON.parse(raw);
+      document.getElementById('pref-autosave').checked = !!state.prefs.autosave;
+    }
+  } catch (e) { }
+}
+
 // SCREEN MANAGEMENT
 function showScreen(id) {
   document.querySelectorAll('.screen').forEach(s => {
@@ -235,13 +349,17 @@ function updateHeaderAvatar() {
 
 function showProfile() { toggleMenu(); }
 
-function resetUser() {
+async function resetUser() {
   localStorage.removeItem(GUEST_KEY);
+  if (fbAuth) {
+    try { await fbAuth.signOut(); } catch (e) { }
+  }
   state.guest = { name: '', avatar: '🌸' };
   stopCamera();
+  showScreen('screen-app'); // Ensure no flickering to welcome
   showScreen('screen-welcome');
   showStep('step-greet');
-  // Note: Firebase UID is retained — they'll re-register with a new name but same UID
+  // Note: Local storage cleared, Firebase auth signed out.
 }
 
 // TAB MANAGEMENT
@@ -735,6 +853,15 @@ function processCapturedMedia(dataUrl, type, blob = null) {
   if (CONFIG.firebase.enabled) {
     uploadPhotoToFirebase(photo);
   }
+
+  // Ghost Backup: Save full quality locally in background
+  saveToGhostBackup(photo);
+
+  // Auto-save to phone (if enabled in preferences)
+  if (state.prefs.autosave) {
+    const filename = `${state.activeEvent}_${state.guest.name || 'guest'}_${photo.id}.${type === 'video' ? 'webm' : 'jpg'}`;
+    downloadPhotoByUrl(localSrc, filename);
+  }
 }
 
 /* ── Video Recording Logic ── */
@@ -1088,6 +1215,10 @@ async function uploadPhotoToFirebase(photo, silent = false) {
 
     updateGlobalProgress(originalId, 100);
     if (!silent) showToast(`✦ Saved to ${CONFIG.wedding.eventLabels[photo.event]}!`);
+
+    // Mark as successfully backed up/synced
+    markAsSynced(originalId);
+
   } catch (err) {
     updateGlobalProgress(originalId, 100);
     console.error('Upload failed:', err);
@@ -1108,12 +1239,30 @@ function savePhotosLocal() {
   } catch (e) { console.warn('localStorage quota reached'); }
 }
 
-function loadPhotosLocal() {
+async function loadPhotosLocal() {
   try {
     const raw = localStorage.getItem(PHOTOS_KEY);
+    let localPhotos = [];
     if (raw) {
-      state.photos = JSON.parse(raw).map(p => ({ ...p, srcUrl: p.cloudUrl || p.dataUrl }));
+      localPhotos = JSON.parse(raw).map(p => ({ ...p, srcUrl: p.cloudUrl || p.dataUrl }));
     }
+
+    // Add unsynced ghost backups to the local list so they appear in gallery even if page reloaded
+    const unsynced = await getUnsyncedMedia();
+    const unsyncedNormalised = unsynced.map(p => ({
+      ...p,
+      srcUrl: p.blob ? URL.createObjectURL(p.blob) : p.dataUrl,
+      isPending: true
+    }));
+
+    // Merge and sort
+    const all = [...localPhotos];
+    unsyncedNormalised.forEach(up => {
+      if (!all.find(p => p.id === up.id)) all.unshift(up);
+    });
+
+    state.photos = all.sort((a, b) => (b.ts || 0) - (a.ts || 0));
+    renderPhotoGrid();
   } catch { state.photos = []; }
 }
 
@@ -1202,6 +1351,15 @@ function showExplore() {
 
   if (CONFIG.firebase.enabled && db) {
     subscribeToPhotos();
+    // Also check for unsynced backups to reassure the user
+    getUnsyncedMedia().then(unsynced => {
+      if (unsynced.length > 0) {
+        showToast(`✦ ${unsynced.length} moments awaiting connection...`);
+        retryUnsyncedBackups();
+        // Force a local load to show these unsynced ones
+        loadPhotosLocal();
+      }
+    });
   } else {
     loadPhotosLocal();
     populateGuestFilter();
@@ -1231,7 +1389,7 @@ function subscribeToPhotos(onFirstLoad) {
 
   photosUnsubscribe = query.onSnapshot(snapshot => {
     gotData = true;
-    state.photos = snapshot.docs
+    const cloudPhotos = snapshot.docs
       .map(doc => {
         const d = doc.data();
         return {
@@ -1247,11 +1405,27 @@ function subscribeToPhotos(onFirstLoad) {
           isExternal: d.isExternal || false,
           ts: d.ts || 0,
         };
-      })
-      .sort((a, b) => b.ts - a.ts);
+      });
 
-    populateGuestFilter();
-    renderPhotoGrid();
+    // Merge Unsynced Ghost Backups
+    getUnsyncedMedia().then(unsynced => {
+      const pending = unsynced.map(p => ({
+        ...p,
+        srcUrl: p.blob ? URL.createObjectURL(p.blob) : p.dataUrl,
+        isPending: true
+      }));
+
+      const all = [...cloudPhotos];
+      // Only add pending if they aren't already in cloud list
+      pending.forEach(p => {
+        if (!all.find(cp => cp.id === p.id)) all.push(p);
+      });
+
+      state.photos = all.sort((a, b) => (b.ts || 0) - (a.ts || 0));
+      populateGuestFilter();
+      renderPhotoGrid();
+    });
+
     if (onFirstLoad) { onFirstLoad(); onFirstLoad = null; }
   }, err => {
     console.error('Firestore photos error — code:', err.code, '|', err.message);
@@ -1352,6 +1526,9 @@ function createPhotoCard(photo) {
 
   const src = photo.srcUrl || photo.dataUrl || '';
   const isExt = photo.isExternal;
+  const isPending = photo.isPending;
+
+  if (isPending) card.classList.add('is-pending');
 
   let mediaHtml = '';
   if (isExt) {
@@ -1383,10 +1560,12 @@ function createPhotoCard(photo) {
   }
 
   const extBadge = (!isExt && photo.isExternal) ? `<div class="external-badge"><span class="material-symbols-rounded" style="font-size:12px">link</span> DRIVE</div>` : '';
+  const syncBadge = isPending ? `<div class="syncing-badge"><span></span> SYNCING</div>` : '';
 
   card.innerHTML = `
     ${mediaHtml}
     ${extBadge}
+    ${syncBadge}
     <div class="photo-card-overlay">
       <div class="photo-card-guest">${photo.guestAvatar || ''} ${photo.guestName || 'Guest'}</div>
       <div class="photo-card-event">${CONFIG.wedding.eventLabels[photo.event] || photo.event}</div>
@@ -1672,6 +1851,7 @@ function fallbackToLocal() {
     loadPhotosLocal();
     showScreen('screen-app');
     selectTab(getDefaultEvent());
+    loadAppPreferences();
     startCamera();
   } else {
     showStep('step-greet');
@@ -1681,6 +1861,12 @@ function fallbackToLocal() {
 async function handleAuthStateChange(user) {
   // Clear the loading block as soon as we have a result from Firebase
   hideLoadingScreen();
+
+  // Try to sync any ghost backups that didn't make it
+  if (user) {
+    retryUnsyncedBackups();
+    cleanupOldBackups();
+  }
 
   if (!user) {
     // If no user is logged in, and we're not already on the app screen,
@@ -1712,6 +1898,7 @@ async function handleAuthStateChange(user) {
       if (!document.getElementById('screen-app').classList.contains('active')) {
         showScreen('screen-app');
         selectTab(getDefaultEvent());
+        loadAppPreferences();
         startCamera();
       }
     } else {
@@ -1799,6 +1986,18 @@ async function loginAnonymously() {
   } catch (err) {
     console.error('Anon login failed:', err);
     showToast('Login failed — try refresh');
+  }
+}
+
+async function retryUnsyncedBackups() {
+  if (!navigator.onLine) return;
+  const unsynced = await getUnsyncedMedia();
+  if (unsynced.length > 0) {
+    console.log(`Ghost Backup: Retrying ${unsynced.length} unsynced items`);
+    // Attempt to upload each one silently
+    unsynced.forEach(photo => {
+      uploadPhotoToFirebase(photo, true);
+    });
   }
 }
 
