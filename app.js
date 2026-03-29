@@ -1307,6 +1307,14 @@ function initFirebase() {
     db = firebase.firestore();
     fbAuth = firebase.auth();
 
+    // Handle redirect result for mobile auth
+    fbAuth.getRedirectResult().catch(err => {
+      console.error('Redirect error:', err);
+      if (err.code !== 'auth/cancelled-query-params') {
+        showToast('Login failed — try again');
+      }
+    });
+
     // Listen for auth state
     fbAuth.onAuthStateChanged(handleAuthStateChange);
   } catch (err) {
@@ -1390,8 +1398,14 @@ async function handleAuthStateChange(user) {
 async function loginWithGoogle() {
   try {
     const provider = new firebase.auth.GoogleAuthProvider();
-    await fbAuth.signInWithPopup(provider);
-    // handleAuthStateChange will take over
+    // Use redirect for mobile, popup for desktop
+    const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent) || (navigator.maxTouchPoints > 0);
+
+    if (isMobile) {
+      await fbAuth.signInWithRedirect(provider);
+    } else {
+      await fbAuth.signInWithPopup(provider);
+    }
   } catch (err) {
     console.error('Google login failed:', err);
     showToast('Google login failed — try another method');
