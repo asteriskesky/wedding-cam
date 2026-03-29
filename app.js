@@ -1308,6 +1308,16 @@ function initFirebase() {
     fbAuth = firebase.auth();
 
     fbAuth.onAuthStateChanged(handleAuthStateChange);
+
+    // On mobile, Google sign-in uses signInWithRedirect (popup is blocked by
+    // iOS WKWebView). After the redirect returns, pick up the result here.
+    // On desktop this resolves immediately with a null result — no side effects.
+    fbAuth.getRedirectResult().catch(err => {
+      if (err.code && err.code !== 'auth/popup-closed-by-user') {
+        console.error('Google redirect error:', err);
+        showToast('Google sign-in failed — please try again');
+      }
+    });
   } catch (err) {
     console.error('Firebase init failed:', err);
     fallbackToLocal();
@@ -1386,10 +1396,23 @@ async function handleAuthStateChange(user) {
 }
 
 // MULTI-PROVIDER AUTH
+
+// signInWithPopup is blocked in iOS standalone (PWA) mode — the WKWebView
+// silently kills window.open(). Use redirect on any mobile browser.
+function isMobileBrowser() {
+  return /Android|iPhone|iPad|iPod|CriOS|FxiOS/i.test(navigator.userAgent);
+}
+
 async function loginWithGoogle() {
   try {
     const provider = new firebase.auth.GoogleAuthProvider();
-    await fbAuth.signInWithPopup(provider);
+    if (isMobileBrowser()) {
+      // Redirect: page reloads after Google consent; getRedirectResult() above
+      // picks up the signed-in user and onAuthStateChanged drives navigation.
+      await fbAuth.signInWithRedirect(provider);
+    } else {
+      await fbAuth.signInWithPopup(provider);
+    }
   } catch (err) {
     console.error('Google login failed:', err);
     if (err.code !== 'auth/popup-closed-by-user' && err.code !== 'auth/cancelled-popup-request') {
