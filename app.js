@@ -1,0 +1,1409 @@
+/* ============================================================
+   APP.JS — Zawa & Rayyan's Wedding Photo App
+   ============================================================
+   BACKEND: Firebase (Firestore + Storage + Anonymous Auth)
+   - Set CONFIG.firebase.enabled = true and fill in credentials
+   - Firestore: /users/{uid}, /photos/{photoId}
+   - Storage:   /photos/{event}/{id}.jpg
+   - Fallback:  localStorage when Firebase is not configured
+   ============================================================ */
+
+/* ============================================================
+   CONFIG — Paste your Firebase project config here
+   ============================================================ */
+const CONFIG = {
+  // ── Cloudinary: free image/video hosting (25 GB, no credit card) ───────
+  cloudinary: {
+    cloudName: 'dxfzmuldc',
+    uploadPreset: 'wedding-cam',
+  },
+
+  // ── Firebase: auth + Firestore metadata only (free Spark plan) ──────────
+  firebase: {
+    enabled: true,
+    apiKey: 'AIzaSyDsvtADJaJVYGDBfcgraLGfTjWfoFRtIJA',
+    authDomain: 'zawa-rayyan-wedding.firebaseapp.com',
+    projectId: 'zawa-rayyan-wedding',
+    storageBucket: 'zawa-rayyan-wedding.firebasestorage.app',
+    messagingSenderId: '513049560495',
+    appId: '1:513049560495:web:4363a43778e649b6ee1b5a',
+    measurementId: 'G-S1YRG6WZHR',
+  },
+  wedding: {
+    couple: "Zawa & Rayyan",
+    events: ['retro', 'mehendi', 'nikah'],
+    eventLabels: { retro: 'Retro', mehendi: 'Mehendi', nikah: 'Nikah' },
+  },
+};
+
+/* ============================================================
+   UTILITIES
+   ============================================================ */
+
+/**
+ * Returns the default event based on the current date:
+ * - April 2nd: Mehendi
+ * - April 4th: Nikah
+ * - Otherwise: Retro
+ */
+function getDefaultEvent() {
+  const now = new Date();
+  const month = now.getMonth(); // 0 is January, 3 is April
+  const date = now.getDate();
+
+  if (month === 3) { // April
+    if (date === 2) return 'mehendi';
+    if (date === 4) return 'nikah';
+  }
+  return 'retro';
+}
+
+/**
+ * Collects a non-invasive device fingerprint for security/audit.
+ * This helps identifying miscreants while respecting privacy.
+ */
+function getDeviceMeta() {
+  const { width, height } = window.screen;
+  return {
+    ua: navigator.userAgent,
+    plt: navigator.platform,
+    lang: navigator.language,
+    scr: `${width}x${height}`,
+    tz: Intl.DateTimeFormat().resolvedOptions().timeZone,
+    hc: navigator.hardwareConcurrency || 'n/a',
+    mem: navigator.deviceMemory || 'n/a',
+    ref: document.referrer || 'direct'
+  };
+}
+
+/* ============================================================
+   FIREBASE REFERENCES (set after init)
+   ============================================================ */
+let db = null;   // Firestore
+let fbAuth = null;   // Firebase Auth
+let currentUid = null;   // Logged-in anonymous UID
+
+// Active Firestore real-time listener (unsubscribe fn)
+let photosUnsubscribe = null;
+
+const LIMITS = {
+  photo: 10 * 1024 * 1024,   // 10MB Cloudinary limit
+  video: 100 * 1024 * 1024,  // 100MB Cloudinary limit
+};
+
+/* ============================================================
+   STATE
+   ============================================================ */
+let state = {
+  guest: { name: '', avatar: '🌸' },
+  mode: 'camera',            // 'camera' | 'gallery' | 'gallery-preview'
+  activeEvent: getDefaultEvent(),
+  cameraStream: null,
+  facingMode: 'environment',
+  flashEnabled: false,
+  photos: [],                // normalised [{id, srcUrl, guestName, guestAvatar, event, type, ts}]
+  exploreFilter: { event: 'all', guest: 'all', type: 'all', search: '' },
+  photoPage: 0,
+  photosPerPage: 12,
+  multiselect: false,
+  selectedIds: new Set(),
+  lightboxPhoto: null,
+  pendingBatch: [],
+};
+
+/* ============================================================
+   AVATAR PICKER
+   ============================================================ */
+const AVATARS = [
+  '🌸', '💍', '🕊️', '✨', '🌹', '🎊', '💫', '👑', '🌺', '🌙',
+  '🦋', '🍃', '🌷', '🪷', '❤️', '🌟', '🎉', '🥂', '🕌', '🌼',
+];
+
+function initAvatarGrid() {
+  const grid = document.getElementById('avatar-grid');
+  grid.innerHTML = '';
+  AVATARS.forEach(emoji => {
+    const btn = document.createElement('button');
+    btn.className = 'avatar-option';
+    btn.textContent = emoji;
+    btn.setAttribute('aria-label', `Select avatar ${emoji}`);
+    btn.onclick = () => selectAvatar(emoji, btn);
+    grid.appendChild(btn);
+  });
+  grid.firstChild?.classList.add('selected');
+  state.guest.avatar = AVATARS[0];
+}
+
+function selectAvatar(emoji, btn) {
+  document.querySelectorAll('.avatar-option').forEach(b => b.classList.remove('selected'));
+  btn.classList.add('selected');
+  state.guest.avatar = emoji;
+}
+
+/* ============================================================
+   ONBOARDING FLOW
+   ============================================================ */
+function showStep(id) {
+  document.querySelectorAll('.welcome-step').forEach(s => s.classList.add('hidden'));
+  const el = document.getElementById(id);
+  el.classList.remove('hidden');
+  el.style.animation = 'none';
+  requestAnimationFrame(() => { el.style.animation = 'fadeUp 0.45s ease both'; });
+}
+
+function goToAvatar() {
+  const nameInput = document.getElementById('guest-name-input');
+  const name = nameInput.value.trim();
+  if (!name) {
+    nameInput.focus();
+    nameInput.style.borderColor = 'rgba(200,80,80,0.6)';
+    setTimeout(() => nameInput.style.borderColor = '', 1500);
+    return;
+  }
+  state.guest.name = name;
+  initAvatarGrid();
+  showStep('step-avatar');
+}
+
+async function enterApp() {
+  // Save guest locally and to Firestore
+  saveGuestLocal();
+  await saveGuestRemote();
+
+  updateHeaderAvatar();
+  showScreen('screen-app');
+  selectTab(getDefaultEvent());
+  startCamera();
+}
+
+/* ============================================================
+   GUEST PERSISTENCE
+   ============================================================ */
+
+// ── Local (fallback) ──────────────────────────────────────
+const GUEST_KEY = 'wedding_guest_v2';
+
+function saveGuestLocal() {
+  localStorage.setItem(GUEST_KEY, JSON.stringify({
+    name: state.guest.name,
+    avatar: state.guest.avatar,
+    uid: currentUid,
+  }));
+}
+
+function loadGuestLocal() {
+  try {
+    const raw = localStorage.getItem(GUEST_KEY);
+    if (!raw) return false;
+    const data = JSON.parse(raw);
+    state.guest = { name: data.name || '', avatar: data.avatar || '🌸' };
+    return !!state.guest.name;
+  } catch { return false; }
+}
+
+// ── Remote (Firebase) ─────────────────────────────────────
+async function saveGuestRemote() {
+  if (!db || !currentUid) return;
+  try {
+    await db.collection('users').doc(currentUid).set({
+      name: state.guest.name,
+      avatar: state.guest.avatar,
+      createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+      lastSeen: firebase.firestore.FieldValue.serverTimestamp(),
+      meta: getDeviceMeta(),
+    }, { merge: true });
+  } catch (e) { console.warn('Firestore user save failed:', e); }
+}
+
+async function updateLastSeen() {
+  if (!db || !currentUid) return;
+  try {
+    await db.collection('users').doc(currentUid).update({
+      lastSeen: firebase.firestore.FieldValue.serverTimestamp(),
+    });
+  } catch { }
+}
+
+/* ============================================================
+   SCREEN MANAGEMENT
+   ============================================================ */
+function showScreen(id) {
+  document.querySelectorAll('.screen').forEach(s => {
+    s.classList.remove('active');
+    s.classList.add('hidden');
+  });
+  const target = document.getElementById(id);
+  target.classList.remove('hidden');
+  requestAnimationFrame(() => target.classList.add('active'));
+}
+
+function updateHeaderAvatar() {
+  document.getElementById('header-avatar-emoji').textContent = state.guest.avatar;
+  document.getElementById('menu-avatar-emoji').textContent = state.guest.avatar;
+  document.getElementById('menu-name-display').textContent = state.guest.name || 'Guest';
+}
+
+function showProfile() { toggleMenu(); }
+
+function resetUser() {
+  localStorage.removeItem(GUEST_KEY);
+  state.guest = { name: '', avatar: '🌸' };
+  stopCamera();
+  showScreen('screen-welcome');
+  showStep('step-greet');
+  // Note: Firebase UID is retained — they'll re-register with a new name but same UID
+}
+
+/* ============================================================
+   TAB MANAGEMENT
+   ============================================================ */
+function selectTab(event) {
+  document.querySelectorAll('#tab-bar .tab').forEach(t => t.classList.remove('active'));
+  const tabEl = document.getElementById(`tab-${event}`);
+  if (tabEl) tabEl.classList.add('active');
+  state.activeEvent = event;
+  document.getElementById('event-label-main').textContent =
+    CONFIG.wedding.eventLabels[event] || event;
+  if (state.mode === 'gallery-preview') setMode('camera');
+}
+
+/* ============================================================
+   CAMERA
+   ============================================================ */
+async function startCamera() {
+  const video = document.getElementById('camera-feed');
+  const placeholder = document.getElementById('camera-placeholder');
+  try {
+    if (state.cameraStream) state.cameraStream.getTracks().forEach(t => t.stop());
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: state.facingMode, width: { ideal: 1920 }, height: { ideal: 1080 } },
+      audio: false,
+    });
+    state.cameraStream = stream;
+    video.srcObject = stream;
+    video.classList.remove('hidden');
+    placeholder.classList.add('hidden');
+    document.getElementById('btn-flash').style.display = 'flex';
+    video.style.transform = state.facingMode === 'user' ? 'scaleX(-1)' : 'none';
+    setMode('camera');
+  } catch (err) {
+    console.warn('Camera error:', err);
+    placeholder.classList.remove('hidden');
+    video.classList.add('hidden');
+  }
+}
+
+function stopCamera() {
+  if (state.cameraStream) {
+    state.cameraStream.getTracks().forEach(t => t.stop());
+    state.cameraStream = null;
+  }
+}
+
+async function flipCamera() {
+  state.facingMode = state.facingMode === 'user' ? 'environment' : 'user';
+  await startCamera();
+}
+
+function toggleFlash() {
+  state.flashEnabled = !state.flashEnabled;
+  document.getElementById('btn-flash').style.opacity = state.flashEnabled ? '1' : '0.5';
+  if (state.cameraStream) {
+    const track = state.cameraStream.getVideoTracks()[0];
+    if (track?.getCapabilities?.().torch) {
+      track.applyConstraints({ advanced: [{ torch: state.flashEnabled }] });
+    }
+  }
+}
+
+/* ============================================================
+   MODE SWITCHING
+   ============================================================ */
+function setMode(mode) {
+  state.mode = mode;
+  const video = document.getElementById('camera-feed');
+  const preview = document.getElementById('preview-image');
+  document.getElementById('btn-cam-mode').classList.toggle('active', mode === 'camera');
+  document.getElementById('btn-gal-mode').classList.toggle('active', mode === 'gallery');
+
+  if (mode === 'camera') {
+    video.classList.remove('hidden');
+    preview.classList.add('hidden');
+  } else {
+    video.classList.add('hidden');
+    preview.classList.add('hidden');
+    document.getElementById('gallery-input').click();
+  }
+}
+
+function handleGalleryFile(event) {
+  const files = Array.from(event.target.files);
+  if (!files.length) { setMode('camera'); return; }
+
+  state.pendingBatch = [];
+  const grid = document.getElementById('batch-preview-grid');
+  const linksContainer = document.getElementById('batch-links-container');
+  const notice = document.getElementById('large-file-notice');
+
+  grid.innerHTML = '';
+  linksContainer.innerHTML = '';
+  notice.classList.add('hidden');
+
+  document.getElementById('batch-event-select').value = state.activeEvent;
+  document.getElementById('batch-count').textContent = files.length;
+
+  let hasLargeFiles = false;
+
+  files.forEach((file, index) => {
+    const isVideo = file.type.startsWith('video/');
+    const limit = isVideo ? LIMITS.video : LIMITS.photo;
+    const isTooLarge = file.size > limit;
+    const id = Date.now() + index;
+    const previewUrl = URL.createObjectURL(file);
+
+    state.pendingBatch.push({ id, file, dataUrl: previewUrl, type: isVideo ? 'video' : 'photo', isTooLarge });
+
+    // Preview
+    const item = document.createElement('div');
+    item.className = `batch-preview-item ${isTooLarge ? 'too-large' : ''}`;
+    item.id = `batch-item-${id}`;
+
+    let media = isVideo ? `<video src="${previewUrl}" muted></video>` : `<img src="${previewUrl}" alt="" />`;
+    let badge = isTooLarge ? `<div class="too-large-badge">⚠️<br/>Large File</div>` : '';
+
+    item.innerHTML = `
+      ${media}
+      ${badge}
+      <button class="batch-remove-btn" onclick="removeFromBatch(${id})">✕</button>
+    `;
+    grid.appendChild(item);
+
+    if (isTooLarge) {
+      hasLargeFiles = true;
+      const input = document.createElement('input');
+      input.type = 'url';
+      input.className = 'gold-input';
+      input.id = `link-for-${id}`;
+      input.placeholder = `Paste Drive/Cloud link for ${file.name.slice(0, 15)}...`;
+      input.style.fontSize = '12px';
+      input.style.padding = '10px';
+      linksContainer.appendChild(input);
+    }
+  });
+
+  if (hasLargeFiles) notice.classList.remove('hidden');
+
+  document.getElementById('batch-modal').classList.remove('hidden');
+  event.target.value = '';
+}
+
+function removeFromBatch(id) {
+  state.pendingBatch = state.pendingBatch.filter(item => item.id !== id);
+  const el = document.getElementById(`batch-item-${id}`);
+  if (el) el.remove();
+  const input = document.getElementById(`link-for-${id}`);
+  if (input) input.remove();
+
+  const hasLarge = state.pendingBatch.some(it => it.isTooLarge);
+  if (!hasLarge) document.getElementById('large-file-notice').classList.add('hidden');
+
+  document.getElementById('batch-count').textContent = state.pendingBatch.length;
+  if (state.pendingBatch.length === 0) closeBatchModal();
+}
+
+/**
+ * Generates a lightweight JPEG thumbnail for large files so we can
+ * still show a preview in the gallery even if the video is on GDrive.
+ */
+async function generateThumbnail(file, type) {
+  const url = URL.createObjectURL(file);
+  return new Promise((resolve) => {
+    if (type === 'photo') {
+      const img = new Image();
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        const MAX = 480;
+        let w = img.width; let h = img.height;
+        if (w > h) { if (w > MAX) { h *= MAX / w; w = MAX; } }
+        else { if (h > MAX) { w *= MAX / h; h = MAX; } }
+        canvas.width = w; canvas.height = h;
+        canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+        URL.revokeObjectURL(url);
+        resolve(canvas.toDataURL('image/jpeg', 0.65));
+      };
+      img.src = url;
+    } else {
+      const video = document.createElement('video');
+      video.muted = true;
+      video.playsInline = true;
+      video.onloadeddata = () => {
+        video.currentTime = 0.5; // grab frame at 0.5s
+      };
+      video.onseeked = () => {
+        const canvas = document.createElement('canvas');
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        canvas.getContext('2d').drawImage(video, 0, 0);
+        URL.revokeObjectURL(url);
+        resolve(canvas.toDataURL('image/jpeg', 0.65));
+      };
+      video.src = url;
+      video.load();
+    }
+  });
+}
+
+function closeBatchModal() {
+  document.getElementById('batch-modal').classList.add('hidden');
+  state.pendingBatch = [];
+  setMode('camera');
+}
+
+async function startBatchUpload() {
+  const event = document.getElementById('batch-event-select').value;
+  const count = state.pendingBatch.length;
+  if (!count) return;
+
+  const btn = document.getElementById('btn-batch-upload');
+  const originalText = btn.innerHTML;
+  btn.disabled = true;
+  btn.innerHTML = 'Uploading...';
+
+  // Process all uploads
+  const uploadPromises = state.pendingBatch.map(async (item) => {
+    const linkInput = document.getElementById(`link-for-${item.id}`);
+    const externalLink = linkInput ? linkInput.value.trim() : null;
+
+    // Use a thumbnail for external links so we still have a nice preview in the gallery
+    const dataUrl = item.isTooLarge
+      ? await generateThumbnail(item.file, item.type)
+      : item.dataUrl;
+
+    const photo = {
+      id: `photo_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+      dataUrl,
+      guestName: state.guest.name,
+      guestAvatar: state.guest.avatar,
+      uid: currentUid,
+      event: event,
+      type: item.type,
+      ts: Date.now(),
+      externalUrl: externalLink,
+      isExternal: !!externalLink
+    };
+
+    // Optimistically add to state for instant UI update behind modal
+    state.photos.unshift({ ...photo, srcUrl: photo.dataUrl });
+
+    if (CONFIG.firebase.enabled) {
+      return uploadPhotoToFirebase(photo, true); // Added 'silent' flag
+    } else {
+      return Promise.resolve();
+    }
+  });
+
+  try {
+    showToast(`Sharing ${count} moments with the Collective...`);
+    await Promise.all(uploadPromises);
+    if (!CONFIG.firebase.enabled) {
+      savePhotosLocal();
+    }
+  } catch (err) {
+    console.error('Batch upload error:', err);
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = originalText;
+    document.getElementById('batch-modal').classList.add('hidden');
+    state.pendingBatch = [];
+    renderPhotoGrid();
+    showToast('All moments shared successfully! ✦');
+    setMode('camera');
+  }
+}
+
+/* ============================================================
+   CAPTURE
+   ============================================================ */
+async function capturePhoto() {
+  const btn = document.getElementById('capture-btn');
+  btn.classList.add('flash');
+  setTimeout(() => btn.classList.remove('flash'), 500);
+
+  let dataUrl = null;
+  let type = 'photo';
+
+  if (state.mode === 'gallery-preview' && state._pendingGalleryFile) {
+    dataUrl = state._pendingGalleryFile.dataUrl;
+    type = state._pendingGalleryFile.type;
+    state._pendingGalleryFile = null;
+    setMode('camera');
+  } else if (state.mode === 'camera' && state.cameraStream) {
+    const video = document.getElementById('camera-feed');
+    const canvas = document.createElement('canvas');
+    canvas.width = video.videoWidth || 1280;
+    canvas.height = video.videoHeight || 720;
+    const ctx = canvas.getContext('2d');
+    if (state.facingMode === 'user') { ctx.translate(canvas.width, 0); ctx.scale(-1, 1); }
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    flashScreen();
+    dataUrl = canvas.toDataURL('image/jpeg', 0.88);
+    type = 'photo';
+  } else {
+    showToast('Open camera or select from gallery first');
+    return;
+  }
+
+  const photo = {
+    id: `photo_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+    dataUrl,
+    guestName: state.guest.name,
+    guestAvatar: state.guest.avatar,
+    uid: currentUid,
+    event: state.activeEvent,
+    type,
+    ts: Date.now(),
+    uploadedAt: new Date().toISOString(),
+  };
+
+  // Optimistically add to local state for instant UI feedback
+  state.photos.unshift({ ...photo, srcUrl: photo.dataUrl });
+  if (!CONFIG.firebase.enabled) {
+    savePhotosLocal();
+    renderPhotoGrid();
+  }
+
+  showToast(`✦ Captured for ${CONFIG.wedding.eventLabels[state.activeEvent]}!`);
+
+  // Upload to Firebase (async — UI already updated)
+  if (CONFIG.firebase.enabled) {
+    uploadPhotoToFirebase(photo);
+  }
+}
+
+function flashScreen() {
+  const flash = document.createElement('div');
+  flash.style.cssText = 'position:fixed;inset:0;background:white;z-index:999;opacity:0.8;pointer-events:none;animation:flashFade 0.25s ease forwards;';
+  if (!document.getElementById('flash-style')) {
+    const s = document.createElement('style');
+    s.id = 'flash-style';
+    s.textContent = '@keyframes flashFade{from{opacity:0.8}to{opacity:0}}';
+    document.head.appendChild(s);
+  }
+  document.body.appendChild(flash);
+  setTimeout(() => flash.remove(), 300);
+}
+
+/* ============================================================
+   PHOTO UPLOAD — Cloudinary (image) + Firestore (metadata)
+   ============================================================ */
+async function uploadPhotoToFirebase(photo, silent = false) {
+  if (!db || !currentUid) return;
+  const originalId = photo.id;
+
+  try {
+    if (!silent) showToast('⬆ Starting upload...');
+
+    // 1. Upload to Cloudinary via XHR for real-time progress
+    const blob = await (await fetch(photo.dataUrl)).blob();
+    const cloudinaryData = await new Promise((resolve, reject) => {
+      const formData = new FormData();
+      formData.append('file', blob, `${photo.id}.jpg`);
+      formData.append('upload_preset', CONFIG.cloudinary.uploadPreset);
+      formData.append('folder', `wedding/${photo.event}`);
+      formData.append('tags', [photo.event, photo.type, photo.guestName.replace(/\s+/g, '_')].join(','));
+
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', `https://api.cloudinary.com/v1_1/${CONFIG.cloudinary.cloudName}/auto/upload`);
+
+      xhr.upload.onprogress = (e) => {
+        if (e.lengthComputable) {
+          const percent = (e.loaded / e.total) * 100;
+          updateGlobalProgress(originalId, percent);
+        }
+      };
+
+      xhr.onload = () => {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          resolve(JSON.parse(xhr.responseText));
+        } else {
+          reject(new Error(`Cloudinary Error: ${xhr.statusText}`));
+        }
+      };
+      xhr.onerror = () => reject(new Error('Network connection error during upload'));
+      xhr.send(formData);
+    });
+
+    const url = cloudinaryData.secure_url;
+
+    // 2. Save Cloudinary URL + metadata to Firestore
+    await db.collection('photos').doc(photo.id).set({
+      url: photo.externalUrl || url,
+      srcUrl: url, // Thumbnail/Preview image
+      guestName: photo.guestName,
+      guestAvatar: photo.guestAvatar,
+      uid: currentUid,
+      event: photo.event,
+      type: photo.type,
+      ts: photo.ts,
+      isExternal: photo.isExternal || false,
+      uploadedAt: firebase.firestore.FieldValue.serverTimestamp(),
+      meta: getDeviceMeta(),
+    });
+
+    updateGlobalProgress(originalId, 100);
+    if (!silent) showToast(`✦ Saved to ${CONFIG.wedding.eventLabels[photo.event]}!`);
+  } catch (err) {
+    updateGlobalProgress(originalId, 100);
+    console.error('Upload failed:', err);
+    if (!silent) showToast('Upload failed — saved locally only');
+  }
+}
+
+/* ============================================================
+   LOCAL STORAGE (fallback when Firebase is off)
+   ============================================================ */
+const PHOTOS_KEY = 'wedding_photos_v2';
+
+function savePhotosLocal() {
+  try {
+    const toStore = state.photos.map(p => ({
+      ...p,
+      dataUrl: p.dataUrl?.slice(0, 500000) || '',
+    }));
+    localStorage.setItem(PHOTOS_KEY, JSON.stringify(toStore));
+  } catch (e) { console.warn('localStorage quota reached'); }
+}
+
+function loadPhotosLocal() {
+  try {
+    const raw = localStorage.getItem(PHOTOS_KEY);
+    if (raw) {
+      state.photos = JSON.parse(raw).map(p => ({ ...p, srcUrl: p.cloudUrl || p.dataUrl }));
+    }
+  } catch { state.photos = []; }
+}
+
+/* ============================================================
+   TOAST
+   ============================================================ */
+let toastTimer = null;
+function showToast(msg) {
+  const toast = document.getElementById('upload-toast');
+  document.getElementById('toast-msg').textContent = msg;
+  toast.classList.remove('hidden');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => toast.classList.add('hidden'), 2800);
+}
+
+/* ============================================================
+   UPLOAD PROGRESS
+   ============================================================ */
+let activeUploads = new Map();
+
+function updateGlobalProgress(id, progress) {
+  const container = document.getElementById('global-progress');
+  if (!container) return;
+  const bar = document.getElementById('progress-bar');
+  const label = document.getElementById('progress-label');
+
+  if (progress >= 100) {
+    activeUploads.delete(id);
+  } else if (progress >= 0) {
+    activeUploads.set(id, progress);
+  }
+
+  if (activeUploads.size === 0) {
+    if (progress >= 100) {
+      bar.style.width = '100%';
+      setTimeout(() => {
+        if (activeUploads.size === 0) {
+          container.style.opacity = '0';
+          setTimeout(() => {
+            if (activeUploads.size === 0) {
+              container.classList.add('hidden');
+              bar.style.width = '0%';
+              container.style.opacity = '1';
+            }
+          }, 300);
+        }
+      }, 1000);
+    } else {
+      container.classList.add('hidden');
+    }
+    return;
+  }
+
+  container.classList.remove('hidden');
+  container.style.opacity = '1';
+
+  let totalProg = 0;
+  activeUploads.forEach(val => totalProg += val);
+  const avg = totalProg / activeUploads.size;
+
+  bar.style.width = `${Math.max(5, avg)}%`;
+
+  if (activeUploads.size > 1) {
+    label.textContent = `Uploading ${activeUploads.size} moments — ${Math.round(avg)}%`;
+  } else {
+    label.textContent = `Sharing your moment — ${Math.round(avg)}%`;
+  }
+}
+
+/* ============================================================
+   EXPLORE GALLERY
+   ============================================================ */
+function showExplore() {
+  document.querySelectorAll('#tab-bar .tab').forEach(t => t.classList.remove('active'));
+  document.getElementById('tab-explore').classList.add('active');
+  showScreen('screen-explore');
+
+  state.photoPage = 0;
+  state.exploreFilter = { event: 'all', guest: 'all', type: 'all', search: '', myPhotosOnly: false };
+
+  // UI: Show guest filter for normal explore
+  const guestGrp = document.getElementById('guest-filter-group');
+  if (guestGrp) guestGrp.classList.remove('hidden');
+
+  // Reset filter UI
+  document.querySelectorAll('#event-chips .chip').forEach(c => c.classList.remove('active'));
+  document.querySelector('#event-chips .chip[data-event="all"]')?.classList.add('active');
+  const gf = document.getElementById('guest-filter');
+  const tf = document.getElementById('type-filter');
+  if (gf) gf.value = 'all';
+  if (tf) tf.value = 'all';
+
+  if (CONFIG.firebase.enabled && db) {
+    subscribeToPhotos();
+  } else {
+    loadPhotosLocal();
+    populateGuestFilter();
+    renderPhotoGrid();
+  }
+}
+
+function closeExplore() {
+  // Stop Firestore listener when leaving gallery
+  if (photosUnsubscribe) {
+    photosUnsubscribe();
+    photosUnsubscribe = null;
+  }
+  showScreen('screen-app');
+  selectTab(state.activeEvent);
+  if (!state.cameraStream) startCamera();
+}
+
+/* ── Firestore real-time listener ─────────────────────────── */
+function subscribeToPhotos(onFirstLoad) {
+  // Tear down previous listener if any
+  if (photosUnsubscribe) { photosUnsubscribe(); photosUnsubscribe = null; }
+
+  // No orderBy — avoid Firestore index requirement; sort client-side
+  let gotData = false;
+  const query = db.collection('photos');
+
+  photosUnsubscribe = query.onSnapshot(snapshot => {
+    gotData = true;
+    state.photos = snapshot.docs
+      .map(doc => {
+        const d = doc.data();
+        return {
+          id: doc.id,
+          srcUrl: d.url || d.srcUrl || '',
+          dataUrl: d.url || d.srcUrl || '',
+          url: d.url || d.srcUrl || '',
+          guestName: d.guestName || 'Guest',
+          guestAvatar: d.guestAvatar || '🌸',
+          uid: d.uid || '',
+          event: d.event || 'retro',
+          type: d.type || 'photo',
+          isExternal: d.isExternal || false,
+          ts: d.ts || 0,
+        };
+      })
+      .sort((a, b) => b.ts - a.ts);
+
+    populateGuestFilter();
+    renderPhotoGrid();
+    if (onFirstLoad) { onFirstLoad(); onFirstLoad = null; }
+  }, err => {
+    console.error('Firestore photos error — code:', err.code, '|', err.message);
+
+    if (!gotData) {
+      // Only show error if we haven't already received a successful snapshot
+      // and we don't have any photos from a previous successful load in this session
+      if (state.photos.length === 0) {
+        if (err.code === 'permission-denied') {
+          showToast('Gallery unavailable — check Firestore rules');
+          console.warn('%c[Firebase] PERMISSION DENIED on /photos — publish your Firestore rules', 'color:red;font-weight:bold');
+        } else {
+          showToast('Could not load gallery — using local photos');
+        }
+        loadPhotosLocal();
+        renderPhotoGrid();
+      }
+      if (onFirstLoad) { onFirstLoad(); onFirstLoad = null; }
+    }
+    // If photos already loaded from a prior snapshot, fail silently
+  });
+}
+
+
+
+/* ── Filters ──────────────────────────────────────────────── */
+function filterEvent(btn) {
+  document.querySelectorAll('#event-chips .chip').forEach(c => c.classList.remove('active'));
+  btn.classList.add('active');
+  state.exploreFilter.event = btn.dataset.event;
+  state.photoPage = 0;
+  renderPhotoGrid();
+}
+
+function applyFilters() {
+  state.exploreFilter.guest = document.getElementById('guest-filter').value;
+  state.exploreFilter.type = document.getElementById('type-filter').value;
+  state.photoPage = 0;
+  renderPhotoGrid();
+}
+
+function getFilteredPhotos() {
+  const { event, guest, type, myPhotosOnly } = state.exploreFilter;
+  return state.photos.filter(p => {
+    if (myPhotosOnly && p.uid !== currentUid) return false;
+    if (event !== 'all' && p.event !== event) return false;
+    if (guest !== 'all' && p.guestName !== guest) return false;
+    if (type !== 'all' && p.type !== type) return false;
+    return true;
+  });
+}
+
+function populateGuestFilter() {
+  const sel = document.getElementById('guest-filter');
+  const guests = [...new Set(state.photos.map(p => p.guestName).filter(Boolean))];
+  const cur = sel.value;
+  sel.innerHTML = '<option value="all">All Guests</option>';
+  guests.forEach(g => {
+    const opt = document.createElement('option');
+    opt.value = g; opt.textContent = g;
+    if (g === cur) opt.selected = true;
+    sel.appendChild(opt);
+  });
+}
+
+/* ── Render grid ──────────────────────────────────────────── */
+function renderPhotoGrid() {
+  const grid = document.getElementById('photo-grid');
+  const emptyEl = document.getElementById('empty-state');
+  const btnReveal = document.getElementById('btn-reveal');
+  const filtered = getFilteredPhotos();
+  const end = (state.photoPage + 1) * state.photosPerPage;
+  const visible = filtered.slice(0, end);
+
+  grid.innerHTML = '';
+
+  if (filtered.length === 0) {
+    emptyEl.classList.remove('hidden');
+    btnReveal.classList.add('hidden');
+  } else {
+    emptyEl.classList.add('hidden');
+    btnReveal.classList.toggle('hidden', end >= filtered.length);
+    visible.forEach(photo => {
+      const card = createPhotoCard(photo);
+      if (state.multiselect) {
+        card.classList.add('selectable');
+        if (state.selectedIds.has(photo.id)) card.classList.add('selected');
+      }
+      grid.appendChild(card);
+    });
+  }
+}
+
+function createPhotoCard(photo) {
+  const card = document.createElement('div');
+  card.className = 'photo-card';
+  card.dataset.id = photo.id;
+
+  const src = photo.srcUrl || photo.dataUrl || '';
+  const isExt = photo.isExternal;
+
+  let mediaHtml = '';
+  if (isExt) {
+    card.classList.add('external-card');
+    mediaHtml = `
+      <div class="external-placeholder">
+        <div class="external-placeholder-icon">
+          <span class="material-symbols-rounded" style="font-size: 26px">link</span>
+        </div>
+        <div class="external-placeholder-subtitle">Shared Memory</div>
+        <div class="external-placeholder-title">${photo.type === 'video' ? 'Video' : 'Photo'} File</div>
+        
+        <div class="external-hover-overlay">
+          <span class="material-symbols-rounded">arrow_outward</span>
+          <span class="external-hover-text">Click to View</span>
+        </div>
+      </div>`;
+  } else if (photo.type === 'video' && !isExt) {
+    mediaHtml = `<video src="${src}" muted loop playsinline preload="metadata"></video>
+                 <div class="video-badge"><svg width="10" height="10" viewBox="0 0 10 10"><polygon points="2,1 9,5 2,9" fill="white"/></svg> VIDEO</div>`;
+  } else {
+    // Show thumbnail for normal photos
+    mediaHtml = src
+      ? `<img src="${src}" alt="By ${photo.guestName}" loading="lazy" />`
+      : `<div class="no-preview-placeholder">
+           <span class="material-symbols-rounded" style="font-size:28px">visibility_off</span>
+           <span>Preview Pending<br/>Click to view</span>
+         </div>`;
+  }
+
+  const extBadge = (!isExt && photo.isExternal) ? `<div class="external-badge"><span class="material-symbols-rounded" style="font-size:12px">link</span> DRIVE</div>` : '';
+
+  card.innerHTML = `
+    ${mediaHtml}
+    ${extBadge}
+    <div class="photo-card-overlay">
+      <div class="photo-card-guest">${photo.guestAvatar || ''} ${photo.guestName || 'Guest'}</div>
+      <div class="photo-card-event">${CONFIG.wedding.eventLabels[photo.event] || photo.event}</div>
+    </div>`;
+
+
+  card.onclick = () => openLightbox(photo);
+
+  const vid = card.querySelector('video');
+  if (vid) {
+    card.addEventListener('mouseenter', () => vid.play());
+    card.addEventListener('mouseleave', () => { vid.pause(); vid.currentTime = 0; });
+  }
+  return card;
+}
+
+function loadMorePhotos() {
+  state.photoPage++;
+  renderPhotoGrid();
+}
+
+/* ============================================================
+   LIGHTBOX
+   ============================================================ */
+function openLightbox(photo) {
+  if (state.multiselect) { toggleSelectPhoto(photo.id); return; }
+  state.lightboxPhoto = photo;
+  const src = photo.srcUrl || photo.dataUrl || '';
+  const isExt = photo.isExternal;
+
+  const img = document.getElementById('lightbox-img');
+  const extPlaceholder = document.getElementById('lightbox-external-placeholder');
+  const extTypeLabel = document.getElementById('lightbox-external-type');
+
+  if (isExt) {
+    img.classList.add('hidden');
+    extPlaceholder.classList.remove('hidden');
+    extTypeLabel.textContent = `${photo.type === 'video' ? 'Video' : 'Photo'} File`;
+    // In external mode, the whole placeholder acts as a redirect trigger
+  } else {
+    img.src = src;
+    img.classList.remove('hidden');
+    extPlaceholder.classList.add('hidden');
+    // For normal files, the image normally just is a static preview, but user wants redirect on middle-click?
+    // "in the middle, keep the current ux where clicking takes to that link."
+    // If it's NOT an external link, clicking the middle should probably NOT redirect to nowhere?
+    // User said "for such type of external link cards". So only for external.
+  }
+
+  // Click handled by openExternalUrl if isExt is true
+  img.onclick = (e) => {
+    if (isExt) openExternalUrl(e);
+  };
+
+  document.getElementById('lightbox-guest').textContent = `${photo.guestAvatar} ${photo.guestName}`;
+  document.getElementById('lightbox-event').textContent = (CONFIG.wedding.eventLabels[photo.event] || photo.event) + (photo.isExternal ? ' (Large File)' : '');
+
+  // For external links, the user specifically wants the redirect link, and a delete button below.
+  // The existing download button should either be hidden or still redirect?
+  // User says "no need for externally word display for redirect".
+
+  const extBtn = document.getElementById('lightbox-external-btn');
+  // Since the middle area now redirects, maybe we don't need the button at all anymore?
+  // "just show a good placeholder ... upon clicking redirect".
+  extBtn.classList.add('hidden');
+
+  // Show delete button only for own photos
+  const delBtn = document.getElementById('lightbox-del');
+  const isOwn = (photo.uid && photo.uid === currentUid) || (!photo.uid && !CONFIG.firebase.enabled);
+  delBtn.classList.toggle('hidden', !isOwn);
+
+  document.getElementById('lightbox').classList.remove('hidden');
+}
+
+function closeLightbox() {
+  document.getElementById('lightbox').classList.add('hidden');
+}
+
+function downloadLightboxPhoto(e) {
+  if (e) e.stopPropagation();
+  if (!state.lightboxPhoto) return;
+  const p = state.lightboxPhoto;
+  // External links are not direct downloads
+  if (p.isExternal) {
+    window.open(p.url, '_blank');
+    return;
+  }
+  downloadPhotoByUrl(p.srcUrl || p.dataUrl, `${p.event}_${p.guestName || 'guest'}_${p.id}.jpg`);
+}
+
+function openExternalUrl(e) {
+  if (e) e.stopPropagation();
+  if (state.lightboxPhoto?.url) {
+    window.open(state.lightboxPhoto.url, '_blank');
+  }
+}
+
+function deleteLightboxPhoto(e) {
+  if (e) e.stopPropagation();
+  if (!state.lightboxPhoto) return;
+  document.getElementById('delete-modal').classList.remove('hidden');
+}
+
+function closeDeleteModal() {
+  document.getElementById('delete-modal').classList.add('hidden');
+}
+
+async function confirmDelete() {
+  if (!state.lightboxPhoto) return;
+  const p = state.lightboxPhoto;
+
+  const btn = document.getElementById('btn-confirm-delete');
+  btn.disabled = true;
+  btn.textContent = 'Deleting...';
+
+  try {
+    // 1. Remove from local state immediately for speed
+    state.photos = state.photos.filter(item => item.id !== p.id);
+    renderPhotoGrid();
+    closeDeleteModal();
+    closeLightbox();
+
+    // 2. Remove from Firestore
+    if (db && currentUid) {
+      await db.collection('photos').doc(p.id).delete();
+      showToast('Photo removed from gallery');
+    }
+  } catch (err) {
+    console.error('Delete failed:', err);
+    showToast('Failed to delete — try again');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Delete Forever';
+  }
+}
+
+async function deletePhoto(photoId) {
+  // Legacy / Direct delete
+  state.photos = state.photos.filter(p => p.id !== photoId);
+  renderPhotoGrid();
+  if (db && currentUid) {
+    try {
+      await db.collection('photos').doc(photoId).delete();
+    } catch (err) { console.error(err); }
+  }
+}
+
+
+
+/* ============================================================
+   MENU PANEL
+   ============================================================ */
+function toggleMenu() {
+  document.getElementById('menu-panel').classList.toggle('hidden');
+}
+
+
+
+/* ============================================================
+   MULTISELECT & DOWNLOAD
+   ============================================================ */
+function toggleMultiselect() {
+  state.multiselect = !state.multiselect;
+  state.selectedIds.clear();
+
+  const bar = document.getElementById('multiselect-bar');
+  const dlIconBtn = document.getElementById('btn-multiselect');   // download icon button
+  const selAllBtn = document.getElementById('btn-select-all');    // checkbox+label button
+  const content = document.getElementById('explore-content');
+
+  if (state.multiselect) {
+    // Swap: hide download icon, show checkbox+label
+    dlIconBtn.classList.add('hidden');
+    selAllBtn.classList.remove('hidden');
+    bar.classList.remove('hidden');
+    content.classList.add('has-multibar');
+  } else {
+    // Swap back
+    dlIconBtn.classList.remove('hidden');
+    selAllBtn.classList.add('hidden');
+    bar.classList.add('hidden');
+    content.classList.remove('has-multibar');
+  }
+  renderPhotoGrid();
+}
+
+function toggleSelectPhoto(id) {
+  if (state.selectedIds.has(id)) state.selectedIds.delete(id);
+  else state.selectedIds.add(id);
+  updateSelectionUI();
+}
+
+function selectAllPhotos() {
+  const filtered = getFilteredPhotos();
+  const allSel = filtered.length > 0 && filtered.every(p => state.selectedIds.has(p.id));
+  if (allSel) state.selectedIds.clear();
+  else filtered.forEach(p => state.selectedIds.add(p.id));
+  // Update tick visibility on the checkbox
+  const tick = document.getElementById('select-all-tick');
+  if (tick) tick.style.opacity = allSel ? '0' : '1';
+  updateSelectionUI();
+  renderPhotoGrid();
+}
+
+function clearSelection() {
+  state.selectedIds.clear();
+  state.multiselect = false;
+  document.getElementById('multiselect-bar').classList.add('hidden');
+  document.getElementById('btn-multiselect').classList.remove('hidden');
+  document.getElementById('btn-select-all').classList.add('hidden');
+  document.getElementById('explore-content').classList.remove('has-multibar');
+  // Reset tick opacity
+  const tick = document.getElementById('select-all-tick');
+  if (tick) tick.style.opacity = '0';
+  renderPhotoGrid();
+}
+
+function updateSelectionUI() {
+  const count = state.selectedIds.size;
+  document.getElementById('sel-count').textContent =
+    count === 0 ? 'No photos selected' : `${count} photo${count > 1 ? 's' : ''} selected`;
+  document.querySelectorAll('.photo-card').forEach(card => {
+    card.classList.toggle('selected', state.selectedIds.has(card.dataset.id));
+  });
+}
+
+async function downloadSelected() {
+  if (state.selectedIds.size === 0) { showToast('Select photos first'); return; }
+  const photos = state.photos.filter(p => state.selectedIds.has(p.id));
+  showToast(`Downloading ${photos.length} photo${photos.length > 1 ? 's' : ''}…`);
+  for (const p of photos) {
+    await downloadPhotoByUrl(p.srcUrl || p.dataUrl, `${p.event}_${p.guestName || 'guest'}.jpg`);
+    await new Promise(r => setTimeout(r, 150));
+  }
+}
+
+function downloadPhotoByUrl(url, filename) {
+  return new Promise(resolve => {
+    const a = document.createElement('a');
+    a.href = url; a.download = filename; a.style.display = 'none';
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => { a.remove(); resolve(); }, 100);
+  });
+}
+
+/* ============================================================
+   FIREBASE INIT & AUTH
+   ============================================================ */
+function initFirebase() {
+  if (!CONFIG.firebase.enabled) return;
+
+  try {
+    firebase.initializeApp(CONFIG.firebase);
+    db = firebase.firestore();
+    fbAuth = firebase.auth();
+
+    // Listen for auth state
+    fbAuth.onAuthStateChanged(handleAuthStateChange);
+  } catch (err) {
+    console.error('Firebase init failed:', err);
+    fallbackToLocal();
+  }
+}
+
+async function handleAuthStateChange(user) {
+  if (!user) return; // signInAnonymously() will trigger this again with a user
+
+  currentUid = user.uid;
+
+  // Update local storage with UID
+  const localData = JSON.parse(localStorage.getItem(GUEST_KEY) || '{}');
+  localStorage.setItem(GUEST_KEY, JSON.stringify({ ...localData, uid: currentUid }));
+
+  // Check if user already has a profile in Firestore
+  try {
+    const userDoc = await db.collection('users').doc(currentUid).get();
+
+    if (userDoc.exists) {
+      // ── Returning guest — load profile, skip onboarding ──
+      const data = userDoc.data();
+      state.guest = { name: data.name || '', avatar: data.avatar || '🌸' };
+      saveGuestLocal();
+      updateHeaderAvatar();
+      subscribeToPhotos();
+
+      if (!document.getElementById('screen-app').classList.contains('active')) {
+        showScreen('screen-app');
+        selectTab(getDefaultEvent());
+        startCamera();
+      }
+    } else {
+      // ── New guest or missing profile in Firestore ──
+      // Check if we have anything locally to pre-fill
+      loadGuestLocal();
+      if (state.guest.name) {
+        // If we had a local name but no remote profile (guest cleared cookies but verified phone), save remote
+        await saveGuestRemote();
+        subscribeToPhotos();
+        showScreen('screen-app');
+        selectTab(getDefaultEvent());
+        startCamera();
+      } else {
+        // No name anywhere → ask for it
+        showStep('step-name');
+      }
+    }
+  } catch (err) {
+    console.error('Firestore user check failed:', err);
+    fallbackToLocal();
+  }
+}
+
+/* ============================================================
+   MULTI-PROVIDER AUTH
+   ============================================================ */
+async function loginWithGoogle() {
+  try {
+    const provider = new firebase.auth.GoogleAuthProvider();
+    await fbAuth.signInWithPopup(provider);
+    // handleAuthStateChange will take over
+  } catch (err) {
+    console.error('Google login failed:', err);
+    showToast('Google login failed — try another method');
+  }
+}
+
+async function loginWithEmail() {
+  const email = document.getElementById('auth-email').value.trim();
+  const pass = document.getElementById('auth-password').value;
+
+  if (!email || !pass || pass.length < 6) {
+    showToast('Enter valid email and 6-char password');
+    return;
+  }
+
+  const btn = document.getElementById('btn-email-auth');
+  btn.disabled = true;
+  btn.textContent = 'Authenticating...';
+
+  try {
+    // 1. Try to Login
+    await fbAuth.signInWithEmailAndPassword(email, pass);
+  } catch (err) {
+    console.warn('Login attempt failed, checking if new user:', err.code);
+
+    // If 'invalid-credential' or 'user-not-found', try creating account
+    if (err.code === 'auth/invalid-credential' || err.code === 'auth/user-not-found' || err.code === 'auth/wrong-password') {
+      try {
+        await fbAuth.createUserWithEmailAndPassword(email, pass);
+        // Success -> Auth listener takes over
+      } catch (signupErr) {
+        if (signupErr.code === 'auth/email-already-in-use') {
+          // If we couldn't create because email exists, THEN we know the password was just wrong
+          showToast('Incorrect password for this email');
+        } else {
+          showToast(signupErr.message || 'Authentication failed');
+        }
+        btn.disabled = false;
+        btn.textContent = 'Confirm & Continue →';
+      }
+    } else {
+      showToast(err.message || 'Login failed');
+      btn.disabled = false;
+      btn.textContent = 'Confirm & Continue →';
+    }
+  }
+}
+
+
+async function loginAnonymously() {
+  try {
+    showToast('Entering as Guest...');
+    await fbAuth.signInAnonymously();
+  } catch (err) {
+    console.error('Anon login failed:', err);
+    showToast('Login failed — try refresh');
+  }
+}
+
+
+
+/* ============================================================
+   INIT
+   ============================================================ */
+document.addEventListener('DOMContentLoaded', () => {
+  if (CONFIG.firebase.enabled) {
+    // Firebase path: auth state change drives the flow
+    initFirebase();
+    // Show a brief loading indicator while Firebase initialises
+    showLoadingScreen();
+  } else {
+    // Local-only path
+    if (loadGuestLocal() && state.guest.name) {
+      updateHeaderAvatar();
+      loadPhotosLocal();
+      showScreen('screen-app');
+      selectTab(getDefaultEvent());
+      startCamera();
+    } else {
+      showStep('step-greet');
+    }
+  }
+
+  // Keyboard shortcuts
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape') {
+      closeLightbox();
+      const menu = document.getElementById('menu-panel');
+      if (!menu.classList.contains('hidden')) toggleMenu();
+    }
+  });
+
+  // Prevent bounce scroll on iOS for non-scroll areas
+  document.body.addEventListener('touchmove', e => {
+    if (e.target.closest('.explore-content')) return;
+    e.preventDefault();
+  }, { passive: false });
+});
+
+/* ── Show a subtle loading state while Firebase auth resolves ─ */
+function showLoadingScreen() {
+  // Show welcome screen but dim it slightly until auth resolves
+  // (auth usually resolves in < 500ms from cache)
+  const welcome = document.getElementById('screen-welcome');
+  welcome.style.opacity = '0.5';
+  welcome.style.pointerEvents = 'none';
+
+  // Auth state change will call showStep() / showScreen() which removes this
+  // As a safety net, restore after 3s even if Firebase is slow
+  setTimeout(() => {
+    welcome.style.opacity = '';
+    welcome.style.pointerEvents = '';
+    if (!document.querySelector('.screen.active#screen-app') &&
+      !document.querySelector('.welcome-step:not(.hidden)')) {
+      showStep('step-auth-choice');
+    }
+  }, 3000);
+}
+
+/* ============================================================
+   SERVICE WORKER
+   ============================================================ */
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('sw.js').catch(() => { });
+  });
+}
