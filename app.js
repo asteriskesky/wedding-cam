@@ -344,22 +344,32 @@ function showScreen(id) {
 function updateHeaderAvatar() {
   document.getElementById('header-avatar-emoji').textContent = state.guest.avatar;
   document.getElementById('menu-avatar-emoji').textContent = state.guest.avatar;
-  document.getElementById('menu-name-display').textContent = state.guest.name || 'Guest';
+  document.getElementById('menu-name-display').textContent = state.guest.name ? `Hey ${state.guest.name} 👋🏻` : 'Hey Guest 👋🏻';
 }
 
 function showProfile() { toggleMenu(); }
 
 async function resetUser() {
+  // 1. Clear local state synchronously
   localStorage.removeItem(GUEST_KEY);
-  if (fbAuth) {
-    try { await fbAuth.signOut(); } catch (e) { }
-  }
   state.guest = { name: '', avatar: '🌸' };
+  currentUid = null;
+
+  // 2. Stop hardware
   stopCamera();
-  showScreen('screen-app'); // Ensure no flickering to welcome
+
+  // 3. Immediate UI transition for responsiveness
   showScreen('screen-welcome');
   showStep('step-greet');
-  // Note: Local storage cleared, Firebase auth signed out.
+
+  // 4. Firebase sign out (async)
+  if (fbAuth) {
+    try {
+      await fbAuth.signOut();
+    } catch (e) {
+      console.warn('Firebase signout error:', e);
+    }
+  }
 }
 
 // TAB MANAGEMENT

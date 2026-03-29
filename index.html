@@ -359,28 +359,27 @@
         <!-- Hidden file input for gallery -->
         <input type="file" id="gallery-input" accept="image/*,video/*" style="display:none"
             onchange="handleGalleryFile(event)" multiple />
-    </div>
 
-    <!-- Bottom Tab Bar -->
-    <nav class="tab-bar" id="tab-bar">
-        <button class="tab" id="tab-retro" onclick="selectTab('retro')" aria-label="Retro">
-            <span class="material-symbols-outlined tab-icon"
-                style="font-variation-settings:'FILL' 1">auto_awesome</span>
-            <span>Retro</span>
-        </button>
-        <button class="tab" id="tab-mehendi" onclick="selectTab('mehendi')" aria-label="Mehendi">
-            <span class="material-symbols-outlined tab-icon">local_florist</span>
-            <span>Mehendi</span>
-        </button>
-        <button class="tab" id="tab-nikah" onclick="selectTab('nikah')" aria-label="Nikah">
-            <span class="material-symbols-outlined tab-icon">favorite</span>
-            <span>Nikah</span>
-        </button>
-        <button class="tab" id="tab-explore" onclick="showExplore()" aria-label="Explore">
-            <span class="material-symbols-outlined tab-icon">explore</span>
-            <span>Explore</span>
-        </button>
-    </nav>
+        <!-- Bottom Tab Bar -->
+        <nav class="tab-bar" id="tab-bar">
+            <button class="tab" id="tab-retro" onclick="selectTab('retro')" aria-label="Retro">
+                <span class="material-symbols-outlined tab-icon"
+                    style="font-variation-settings:'FILL' 1">auto_awesome</span>
+                <span>Retro</span>
+            </button>
+            <button class="tab" id="tab-mehendi" onclick="selectTab('mehendi')" aria-label="Mehendi">
+                <span class="material-symbols-outlined tab-icon">local_florist</span>
+                <span>Mehendi</span>
+            </button>
+            <button class="tab" id="tab-nikah" onclick="selectTab('nikah')" aria-label="Nikah">
+                <span class="material-symbols-outlined tab-icon">favorite</span>
+                <span>Nikah</span>
+            </button>
+            <button class="tab" id="tab-explore" onclick="showExplore()" aria-label="Explore">
+                <span class="material-symbols-outlined tab-icon">explore</span>
+                <span>Explore</span>
+            </button>
+        </nav>
     </div>
 
     <!-- EXPLORE GALLERY -->
@@ -638,7 +637,7 @@
                 <img src="assets/zr_logo.svg" alt="ZR Wedding" class="menu-brand-logo" />
             </div>
             <div class="menu-avatar" id="menu-avatar-emoji">👤</div>
-            <div class="menu-name" id="menu-name-display">Guest</div>
+            <div class="menu-name" id="menu-name-display">Hey Guest 👋🏻</div>
             <div class="menu-sub">Grateful for your presence and every<br />memory you've clicked for us! ✨</div>
             <div class="menu-items">
                 <button class="btn-gold menu-explore-btn" onclick="toggleMenu();showExplore()">
