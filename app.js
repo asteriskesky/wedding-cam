@@ -735,6 +735,72 @@ async function startBatchUpload() {
   }
 }
 
+// ── Filter Application Helper for Canvas ───────────────────
+function applyActiveFiltersToContext(ctx, width, height, source) {
+  ctx.save();
+
+  // Base filters (Brightness, etc.)
+  let filterStr = `brightness(${state.filters.brightness})`;
+  if (state.filters.aperture > 0) filterStr += ` blur(${state.filters.aperture}px)`;
+  if (state.filters.retro) filterStr += ` sepia(0.3) contrast(1.1) saturate(0.9)`;
+  if (state.filters.monochrome) filterStr += ` grayscale(1) contrast(1.1)`;
+  if (state.filters.lowlight) filterStr += ` brightness(1.4) contrast(0.8) saturate(1.2)`;
+
+  ctx.filter = filterStr;
+
+  // Mirror for front camera
+  if (state.facingMode === 'user') {
+    ctx.translate(width, 0);
+    ctx.scale(-1, 1);
+  }
+
+  if (state.filters.portrait) {
+    // Sharp subject in center, blurred background
+    const tempCanvas = document.createElement('canvas');
+    tempCanvas.width = width; tempCanvas.height = height;
+    const tctx = tempCanvas.getContext('2d');
+    tctx.drawImage(source, 0, 0, width, height);
+
+    ctx.save();
+    ctx.filter = filterStr + ' blur(12px)';
+    ctx.drawImage(source, 0, 0, width, height);
+    ctx.restore();
+
+    const maskCanvas = document.createElement('canvas');
+    maskCanvas.width = width; maskCanvas.height = height;
+    const mctx = maskCanvas.getContext('2d');
+    const grad = mctx.createRadialGradient(width * 0.5, height * 0.45, 0, width * 0.5, height * 0.45, height * 0.7);
+    grad.addColorStop(0.15, 'rgba(0,0,0,1)');
+    grad.addColorStop(0.65, 'rgba(0,0,0,0)');
+    mctx.fillStyle = grad;
+    mctx.fillRect(0, 0, width, height);
+
+    const sharpPart = document.createElement('canvas');
+    sharpPart.width = width; sharpPart.height = height;
+    const sctx = sharpPart.getContext('2d');
+    sctx.drawImage(tempCanvas, 0, 0);
+    sctx.globalCompositeOperation = 'destination-in';
+    sctx.drawImage(maskCanvas, 0, 0);
+
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.drawImage(sharpPart, 0, 0);
+  } else {
+    ctx.drawImage(source, 0, 0, width, height);
+  }
+
+  ctx.restore();
+
+  // Overlays (Vignette)
+  if (state.filters.vignette) {
+    const vGrad = ctx.createRadialGradient(width / 2, height / 2, 0, width / 2, height / 2, height * 0.9);
+    vGrad.addColorStop(0, 'rgba(0,0,0,0)');
+    vGrad.addColorStop(0.7, 'rgba(0,0,0,0)');
+    vGrad.addColorStop(1, 'rgba(0,0,0,0.5)');
+    ctx.fillStyle = vGrad;
+    ctx.fillRect(0, 0, width, height);
+  }
+}
+
 // CAPTURE
 async function capturePhoto() {
   const btn = document.getElementById('capture-btn');
@@ -756,72 +822,8 @@ async function capturePhoto() {
     canvas.height = video.videoHeight || 720;
     const ctx = canvas.getContext('2d');
 
-    // Apply Filters (Brightness, Aperture/Blur, Retro, Monochrome)
-    let filters = [];
-    if (state.filters.brightness !== 1) filters.push(`brightness(${state.filters.brightness})`);
-    if (state.filters.aperture > 0) filters.push(`blur(${state.filters.aperture}px)`);
-    if (state.filters.retro) filters.push(`sepia(0.3) contrast(1.1) saturate(0.9)`);
-    if (state.filters.monochrome) filters.push(`grayscale(1) contrast(1.1)`);
-    if (state.filters.lowlight) filters.push(`brightness(1.4) contrast(0.8) saturate(1.2)`);
+    applyActiveFiltersToContext(ctx, canvas.width, canvas.height, video);
 
-    if (filters.length > 0) ctx.filter = filters.join(' ');
-
-    if (state.facingMode === 'user') { ctx.translate(canvas.width, 0); ctx.scale(-1, 1); }
-
-    if (state.filters.portrait) {
-      // Draw sharp base
-      const tempCanvas = document.createElement('canvas');
-      tempCanvas.width = canvas.width;
-      tempCanvas.height = canvas.height;
-      const tctx = tempCanvas.getContext('2d');
-      tctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-
-      // Draw blurred version on main canvas
-      ctx.save();
-      ctx.filter = (ctx.filter !== 'none' ? ctx.filter + ' ' : '') + 'blur(12px)';
-      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-      ctx.restore();
-
-      // Mask out the center of the blurred version to reveal sharp version
-      const maskCanvas = document.createElement('canvas');
-      maskCanvas.width = canvas.width;
-      maskCanvas.height = canvas.height;
-      const mctx = maskCanvas.getContext('2d');
-      const grad = mctx.createRadialGradient(
-        canvas.width * 0.5, canvas.height * 0.45, 0,
-        canvas.width * 0.5, canvas.height * 0.45, canvas.height * 0.7
-      );
-      grad.addColorStop(0.15, 'rgba(0,0,0,1)');
-      grad.addColorStop(0.65, 'rgba(0,0,0,0)');
-      mctx.fillStyle = grad;
-      mctx.fillRect(0, 0, canvas.width, canvas.height);
-
-      const sharpPart = document.createElement('canvas');
-      sharpPart.width = canvas.width;
-      sharpPart.height = canvas.height;
-      const sctx = sharpPart.getContext('2d');
-      sctx.drawImage(tempCanvas, 0, 0);
-      sctx.globalCompositeOperation = 'destination-in';
-      sctx.drawImage(maskCanvas, 0, 0);
-
-      ctx.globalCompositeOperation = 'source-over';
-      ctx.drawImage(sharpPart, 0, 0);
-    } else {
-      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-    }
-
-    if (state.filters.vignette) {
-      const vGrad = ctx.createRadialGradient(
-        canvas.width / 2, canvas.height / 2, 0,
-        canvas.width / 2, canvas.height / 2, canvas.height * 0.9
-      );
-      vGrad.addColorStop(0, 'rgba(0,0,0,0)');
-      vGrad.addColorStop(0.7, 'rgba(0,0,0,0)');
-      vGrad.addColorStop(1, 'rgba(0,0,0,0.5)');
-      ctx.fillStyle = vGrad;
-      ctx.globalCompositeOperation = 'source-over';
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
-    }
     flashScreen();
     dataUrl = canvas.toDataURL('image/jpeg', 0.88);
     type = 'photo';
@@ -830,7 +832,7 @@ async function capturePhoto() {
     return;
   }
 
-  processCapturedMedia(dataUrl, type, null); // Photos don't need direct blob for now as canvas is efficient
+  processCapturedMedia(dataUrl, type, null);
 }
 
 function processCapturedMedia(dataUrl, type, blob = null) {
@@ -877,6 +879,8 @@ function processCapturedMedia(dataUrl, type, blob = null) {
 /* ── Video Recording Logic ── */
 let longPressTimer = null;
 const LONG_PRESS_DELAY = 450;
+let filteredStreamTimer = null;
+let recordingCanvas = null;
 
 function initCaptureHandlers() {
   const btn = document.getElementById('capture-btn');
@@ -938,12 +942,55 @@ async function startRecording() {
   try {
     state.recordedChunks = [];
     state.recordedSize = 0;
-    updateSizeProgress(0); // Reset UI
-    const mimeType = MediaRecorder.isTypeSupported('video/webm;codecs=vp9')
-      ? 'video/webm;codecs=vp9'
-      : 'video/webm';
+    updateSizeProgress(0);
 
-    state.mediaRecorder = new MediaRecorder(state.cameraStream, { mimeType });
+    // Set state FIRST so the drawLoop knows we are recording
+    state.isRecording = true;
+    state.isPaused = false;
+    state.recordingStartTime = Date.now();
+    state.totalElapsedBeforePause = 0;
+
+    const video = document.getElementById('camera-feed');
+    const hasActiveFilters = state.filters.retro || state.filters.monochrome || state.filters.lowlight || state.filters.portrait || state.filters.vignette || state.filters.aperture > 0 || state.filters.brightness !== 1;
+
+    let streamToRecord;
+
+    if (hasActiveFilters) {
+      if (!recordingCanvas) recordingCanvas = document.createElement('canvas');
+      recordingCanvas.width = video.videoWidth || 1280;
+      recordingCanvas.height = video.videoHeight || 720;
+      const rctx = recordingCanvas.getContext('2d');
+
+      const drawLoop = () => {
+        if (!state.isRecording && !state.isPaused) {
+          cancelAnimationFrame(filteredStreamTimer);
+          return;
+        }
+        applyActiveFiltersToContext(rctx, recordingCanvas.width, recordingCanvas.height, video);
+        filteredStreamTimer = requestAnimationFrame(drawLoop);
+      };
+
+      // Ensure first frame is drawn
+      applyActiveFiltersToContext(rctx, recordingCanvas.width, recordingCanvas.height, video);
+
+      const canvasStream = recordingCanvas.captureStream(30);
+      const audioTracks = state.cameraStream.getAudioTracks();
+
+      // Merge video track from canvas and audio from camera
+      streamToRecord = new MediaStream([
+        ...canvasStream.getVideoTracks(),
+        ...audioTracks.map(t => t.clone())
+      ]);
+
+      drawLoop();
+    } else {
+      streamToRecord = state.cameraStream;
+    }
+
+    // Use default to let browser choose best supported webm profile
+    const mimeType = 'video/webm';
+
+    state.mediaRecorder = new MediaRecorder(streamToRecord, { mimeType });
 
     state.mediaRecorder.ondataavailable = (e) => {
       if (e.data.size > 0) {
@@ -955,12 +1002,11 @@ async function startRecording() {
 
     state.mediaRecorder.onstop = async () => {
       const blob = new Blob(state.recordedChunks, { type: 'video/webm' });
-
-      // Clean up UI state
       document.body.classList.remove('is-reviewing');
       document.getElementById('capture-btn').classList.remove('recording');
       state.isPaused = false;
       state.isRecording = false;
+      cancelAnimationFrame(filteredStreamTimer);
 
       if (state.recordedSize > LIMITS.video) {
         triggerLocalSave(blob);
@@ -969,13 +1015,9 @@ async function startRecording() {
       }
     };
 
-    state.mediaRecorder.start(100); // chunk every 100ms to keep size updated
-    state.isRecording = true;
-    state.isPaused = false;
-    state.recordingStartTime = Date.now();
-    state.totalElapsedBeforePause = 0;
 
-    // UI Updates
+    state.mediaRecorder.start(100);
+
     document.body.classList.add('is-recording');
     document.getElementById('capture-btn').classList.add('recording');
     document.getElementById('recording-indicator').classList.add('active');
@@ -986,6 +1028,7 @@ async function startRecording() {
   } catch (err) {
     console.error('Recording start failed:', err);
     state.isRecording = false;
+    cancelAnimationFrame(filteredStreamTimer);
   }
 }
 
@@ -996,15 +1039,13 @@ function pauseRecording() {
   state.mediaRecorder.pause();
   state.isRecording = false;
   state.isPaused = true;
+  if (filteredStreamTimer) cancelAnimationFrame(filteredStreamTimer);
 
-  // Store the elapsed time
   state.totalElapsedBeforePause += (Date.now() - state.recordingStartTime);
-
   clearInterval(state.recordingTimer);
   document.body.classList.remove('is-recording');
   document.body.classList.add('is-reviewing');
   document.getElementById('capture-btn').classList.remove('recording');
-
   if ('vibrate' in navigator) navigator.vibrate(30);
 }
 
@@ -1016,14 +1057,24 @@ function resumeRecording() {
   state.isPaused = false;
   state.recordingStartTime = Date.now();
 
+  const video = document.getElementById('camera-feed');
+  const hasActiveFilters = state.filters.retro || state.filters.monochrome || state.filters.lowlight || state.filters.portrait || state.filters.vignette || state.filters.aperture > 0 || state.filters.brightness !== 1;
+
+  if (hasActiveFilters && recordingCanvas) {
+    const rctx = recordingCanvas.getContext('2d');
+    const drawLoop = () => {
+      if (!state.isRecording && !state.isPaused) return;
+      applyActiveFiltersToContext(rctx, recordingCanvas.width, recordingCanvas.height, video);
+      filteredStreamTimer = requestAnimationFrame(drawLoop);
+    };
+    drawLoop();
+  }
+
   document.body.classList.remove('is-reviewing');
   document.body.classList.add('is-recording');
   document.getElementById('capture-btn').classList.add('recording');
   document.getElementById('recording-indicator').classList.add('active');
-
-  // Reset help counter
   window.dispatchEvent(new Event('recording-resume'));
-
   state.recordingTimer = setInterval(updateRecordingTimer, 1000);
   if ('vibrate' in navigator) navigator.vibrate(40);
 }
@@ -1031,8 +1082,6 @@ function resumeRecording() {
 function finishAndSaveRecording() {
   if (!state.mediaRecorder) return;
   state.mediaRecorder.stop();
-
-  // UI cleanup
   clearInterval(state.recordingTimer);
   document.getElementById('recording-timer').textContent = 'REC 00:00';
   document.body.classList.remove('is-recording', 'is-reviewing');
@@ -1048,12 +1097,13 @@ function discardRecording() {
   btn.textContent = "Discard Forever";
   btn.onclick = () => {
     if (state.mediaRecorder) {
-      state.mediaRecorder.onstop = null; // Don't process the blob
+      state.mediaRecorder.onstop = null;
       state.mediaRecorder.stop();
     }
     state.isRecording = false;
     state.isPaused = false;
     state.recordedChunks = [];
+    if (filteredStreamTimer) cancelAnimationFrame(filteredStreamTimer);
 
     clearInterval(state.recordingTimer);
     document.getElementById('recording-timer').textContent = 'REC 00:00';
@@ -1184,6 +1234,9 @@ async function uploadPhotoToFirebase(photo, silent = false) {
       formData.append('upload_preset', CONFIG.cloudinary.uploadPreset);
       formData.append('folder', `wedding/${photo.event}`);
       formData.append('tags', [photo.event, photo.type, photo.guestName.replace(/\s+/g, '_')].join(','));
+
+      // Explicitly tell Cloudinary it's a video if it is
+      if (photo.type === 'video') formData.append('resource_type', 'video');
 
       const xhr = new XMLHttpRequest();
       xhr.open('POST', `https://api.cloudinary.com/v1_1/${CONFIG.cloudinary.cloudName}/auto/upload`);

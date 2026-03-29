@@ -2416,7 +2416,8 @@ input:checked+.slider:before {
    ============================================================ */
 .progress-container {
   position: fixed;
-  top: 0;
+  top: var(--header-h);
+  /* Position below fixed header */
   left: 0;
   right: 0;
   height: 4px;
@@ -2436,6 +2437,7 @@ input:checked+.slider:before {
 .progress-label {
   position: absolute;
   top: 10px;
+  /* Small gap from the bar */
   left: 50%;
   transform: translateX(-50%);
   font-size: 9px;
