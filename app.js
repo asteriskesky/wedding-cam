@@ -1393,8 +1393,15 @@ function updateGlobalProgress(id, progress) {
 
 // EXPLORE GALLERY
 function showExplore() {
-  document.querySelectorAll('#tab-bar .tab').forEach(t => t.classList.remove('active'));
-  document.getElementById('tab-explore').classList.add('active');
+  // Update internal state and clear all tab highlights
+  const allTabs = document.querySelectorAll('.tab');
+  allTabs.forEach(t => t.classList.remove('active'));
+
+  // Highlight the Explore tab (main) and any tab that calls showExplore
+  document.querySelectorAll('#tab-explore, .tab[onclick*="showExplore"]').forEach(t => {
+    t.classList.add('active');
+  });
+
   showScreen('screen-explore');
 
   state.photoPage = 0;
