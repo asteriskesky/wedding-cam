@@ -1512,6 +1512,27 @@ function hideLoadingScreen() {
 // SERVICE WORKER
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
-    navigator.serviceWorker.register('sw.js').catch(() => { });
+    navigator.serviceWorker.register('sw.js').then(reg => {
+      reg.onupdatefound = () => {
+        const sw = reg.installing;
+        if (sw) {
+          sw.onstatechange = () => {
+            if (sw.state === 'installed' && navigator.serviceWorker.controller) {
+              // New version available! Reload to apply.
+              window.location.reload();
+            }
+          };
+        }
+      };
+    }).catch(() => { });
+  });
+
+  // Handle redundant service worker claims
+  let refreshing = false;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (!refreshing) {
+      refreshing = true;
+      window.location.reload();
+    }
   });
 }
