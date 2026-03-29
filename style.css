@@ -800,18 +800,88 @@ body.is-recording #btn-flip {
   }
 }
 
+.resume-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+}
+
+/* REVIEW STATE TOGGLES */
+body.is-reviewing #btn-flash,
+body.is-reviewing #btn-flip,
+body.is-reviewing .shutter-icon-normal {
+  display: none !important;
+}
+
+body.is-reviewing .discard-btn,
+body.is-reviewing .save-btn,
+body.is-reviewing .shutter-icon-review {
+  display: flex !important;
+}
+
+body.is-reviewing #capture-btn {
+  background: linear-gradient(135deg, #B8942A 0%, #D4A83A 100%) !important;
+  border-color: #fff !important;
+  box-shadow: 0 8px 32px rgba(184, 148, 42, 0.4) !important;
+  transform: scale(1.1);
+  /* Subtle pop when reviewing */
+}
+
+.discard-btn {
+  background: #fff !important;
+  border-color: var(--border) !important;
+  color: #e74c3c !important;
+  box-shadow: 0 4px 12px var(--shadow) !important;
+  display: none;
+  /* hidden by default */
+}
+
+.save-btn {
+  background: #fff !important;
+  border-color: var(--border) !important;
+  color: #000 !important;
+  box-shadow: 0 4px 12px var(--shadow) !important;
+  animation: bounceIn 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275) both;
+  display: none;
+  /* hidden by default */
+}
+
+.shutter-icon-review {
+  display: none;
+  align-items: center;
+  justify-content: center;
+}
+
+.side-action-wrap {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+@keyframes bounceIn {
+  0% {
+    transform: scale(0.3);
+    opacity: 0;
+  }
+
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
 .recording-indicator {
-  position: absolute;
-  top: 24px;
-  left: 50%;
-  transform: translateX(-50%) translateY(-20px);
+  position: relative;
+  margin: 0 auto 16px;
   display: flex;
   align-items: center;
   gap: 12px;
-  background: rgba(0, 0, 0, 0.65);
-  backdrop-filter: blur(8px);
+  background: rgba(0, 0, 0, 0.7);
+  backdrop-filter: blur(12px);
   color: #fff;
-  padding: 6px 14px;
+  padding: 8px 18px;
   border-radius: 100px;
   font-family: 'Inter', sans-serif;
   font-size: 13px;
@@ -822,13 +892,24 @@ body.is-recording #btn-flip {
   transition: all 0.35s cubic-bezier(0.19, 1, 0.22, 1);
   z-index: 100;
   border: 1px solid rgba(255, 255, 255, 0.15);
-  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.4);
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+  min-width: 120px;
+  justify-content: center;
+  transform: translateY(10px);
+}
+
+#recording-timer {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum";
+  display: inline-block;
+  min-width: 75px;
+  text-align: left;
 }
 
 .recording-indicator.active {
   opacity: 1;
   pointer-events: auto;
-  transform: translateX(-50%) translateY(0);
+  transform: translateY(0);
 }
 
 .recording-dot {

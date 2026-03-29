@@ -246,13 +246,29 @@ function resetUser() {
 
 // TAB MANAGEMENT
 function selectTab(event) {
-  document.querySelectorAll('#tab-bar .tab').forEach(t => t.classList.remove('active'));
-  const tabEl = document.getElementById(`tab-${event}`);
-  if (tabEl) tabEl.classList.add('active');
+  CONFIG.wedding.activeEvent = event;
   state.activeEvent = event;
-  document.getElementById('event-label-main').textContent =
-    CONFIG.wedding.eventLabels[event] || event;
-  if (state.mode === 'gallery-preview') setMode('camera');
+
+  // Update internal state
+  const tabs = document.querySelectorAll('.tab');
+  tabs.forEach(t => t.classList.remove('active'));
+
+  // Find all tabs for this event (could be in main or explore)
+  const eventTabs = document.querySelectorAll(`[id="tab-${event}"], [onclick*="selectTab('${event}')"]`);
+  eventTabs.forEach(t => t.classList.add('active'));
+
+  // Update UI labels
+  const label = document.getElementById('event-label-main');
+  if (label) label.innerText = CONFIG.wedding.eventLabels[event];
+
+  // CORE NAVIGATION FIX:
+  // When switching tabs/events, always return to the camera view
+  if (document.getElementById('screen-explore') && !document.getElementById('screen-explore').classList.contains('hidden')) {
+    closeExplore();
+  }
+
+  setMode('camera');
+  console.log("Selected event:", event);
 }
 
 // CAMERA
@@ -737,27 +753,45 @@ function initCaptureHandlers() {
     }
 
     longPressTimer = setTimeout(() => {
-      startRecording();
+      longPressTimer = null; // Reset ID so endTap knows we've already started
+      if (state.isPaused) {
+        resumeRecording();
+      } else {
+        startRecording();
+      }
     }, LONG_PRESS_DELAY);
   };
 
+  let resumeTapCount = 0;
   const endTap = (e) => {
     if (longPressTimer) {
       clearTimeout(longPressTimer);
       longPressTimer = null;
 
       if (state.isRecording) {
-        stopRecording();
-      } else {
+        pauseRecording();
+      } else if (state.isPaused) {
+        // Tap doesn't continue, counts towards a hint toast
+        resumeTapCount++;
+        if (resumeTapCount >= 3) {
+          showToast("Long press to keep the memory rolling! ✨");
+          resumeTapCount = 0;
+        }
+      } else if (!state.isPaused) {
         capturePhoto();
       }
+    } else if (state.isRecording) {
+      // Already recording, release to pause
+      pauseRecording();
     }
   };
+
+  // Reset tap count on successful resume
+  window.addEventListener('recording-resume', () => { resumeTapCount = 0; });
 
   btn.addEventListener('mousedown', startTap);
   btn.addEventListener('touchstart', startTap, { passive: false });
   btn.addEventListener('mouseup', endTap);
-  btn.addEventListener('mouseleave', endTap);
   btn.addEventListener('touchend', endTap);
 }
 
@@ -785,29 +819,32 @@ async function startRecording() {
     state.mediaRecorder.onstop = async () => {
       const blob = new Blob(state.recordedChunks, { type: 'video/webm' });
 
+      // Clean up UI state
+      document.body.classList.remove('is-reviewing');
+      document.getElementById('capture-btn').classList.remove('recording');
+      state.isPaused = false;
+      state.isRecording = false;
+
       if (state.recordedSize > LIMITS.video) {
-        // Handle oversized recording
         triggerLocalSave(blob);
       } else {
-        // Normal upload
         processCapturedMedia(null, 'video', blob);
       }
     };
 
-    state.mediaRecorder.start();
+    state.mediaRecorder.start(100); // chunk every 100ms to keep size updated
     state.isRecording = true;
+    state.isPaused = false;
     state.recordingStartTime = Date.now();
+    state.totalElapsedBeforePause = 0;
 
     // UI Updates
     document.body.classList.add('is-recording');
-    const btn = document.getElementById('capture-btn');
-    btn.classList.add('recording');
+    document.getElementById('capture-btn').classList.add('recording');
     document.getElementById('recording-indicator').classList.add('active');
 
     state.recordingTimer = setInterval(updateRecordingTimer, 1000);
-
-    // Vibration feedback on mobile
-    if ('vibrate' in navigator) navigator.vibrate(50);
+    if ('vibrate' in navigator) navigator.vibrate(60);
 
   } catch (err) {
     console.error('Recording start failed:', err);
@@ -815,31 +852,95 @@ async function startRecording() {
   }
 }
 
-function stopRecording() {
+function pauseRecording() {
   if (!state.isRecording || !state.mediaRecorder) return;
+  if (state.mediaRecorder.state !== 'recording') return;
 
-  state.mediaRecorder.stop();
+  state.mediaRecorder.pause();
   state.isRecording = false;
+  state.isPaused = true;
+
+  // Store the elapsed time
+  state.totalElapsedBeforePause += (Date.now() - state.recordingStartTime);
 
   clearInterval(state.recordingTimer);
-  document.getElementById('recording-timer').textContent = 'REC 00:00';
-  updateSizeProgress(0); // Reset UI for next time
-
   document.body.classList.remove('is-recording');
-  const btn = document.getElementById('capture-btn');
-  btn.classList.remove('recording');
-  document.getElementById('recording-indicator').classList.remove('active');
+  document.body.classList.add('is-reviewing');
+  document.getElementById('capture-btn').classList.remove('recording');
 
-  if ('vibrate' in navigator) navigator.vibrate([30, 30]);
+  if ('vibrate' in navigator) navigator.vibrate(30);
+}
+
+function resumeRecording() {
+  if (!state.isPaused || !state.mediaRecorder) return;
+
+  state.mediaRecorder.resume();
+  state.isRecording = true;
+  state.isPaused = false;
+  state.recordingStartTime = Date.now();
+
+  document.body.classList.remove('is-reviewing');
+  document.body.classList.add('is-recording');
+  document.getElementById('capture-btn').classList.add('recording');
+  document.getElementById('recording-indicator').classList.add('active');
+
+  // Reset help counter
+  window.dispatchEvent(new Event('recording-resume'));
+
+  state.recordingTimer = setInterval(updateRecordingTimer, 1000);
+  if ('vibrate' in navigator) navigator.vibrate(40);
+}
+
+function finishAndSaveRecording() {
+  if (!state.mediaRecorder) return;
+  state.mediaRecorder.stop();
+
+  // UI cleanup
+  clearInterval(state.recordingTimer);
+  document.getElementById('recording-timer').textContent = 'REC 00:00';
+  document.body.classList.remove('is-recording', 'is-reviewing');
+  document.getElementById('recording-indicator').classList.remove('active');
+  if ('vibrate' in navigator) navigator.vibrate([40, 40]);
+}
+
+function discardRecording() {
+  const modal = document.getElementById('delete-modal');
+  document.getElementById('delete-modal-title').textContent = "Discard video?";
+  document.getElementById('delete-modal-text').textContent = "This will permanently remove the current recording session.";
+  const btn = document.getElementById('btn-confirm-delete');
+  btn.textContent = "Discard Forever";
+  btn.onclick = () => {
+    if (state.mediaRecorder) {
+      state.mediaRecorder.onstop = null; // Don't process the blob
+      state.mediaRecorder.stop();
+    }
+    state.isRecording = false;
+    state.isPaused = false;
+    state.recordedChunks = [];
+
+    clearInterval(state.recordingTimer);
+    document.getElementById('recording-timer').textContent = 'REC 00:00';
+    document.body.classList.remove('is-recording', 'is-reviewing');
+    document.getElementById('recording-indicator').classList.remove('active');
+    updateSizeProgress(0);
+    showToast("Moment discarded");
+    closeDeleteModal();
+  };
+  modal.classList.remove('hidden');
+}
+
+function stopRecording() {
+  pauseRecording();
 }
 
 function updateRecordingTimer() {
-  const elapsed = Math.floor((Date.now() - state.recordingStartTime) / 1000);
+  const currentElapsed = Date.now() - state.recordingStartTime;
+  const totalMs = (state.totalElapsedBeforePause || 0) + currentElapsed;
+  const elapsed = Math.floor(totalMs / 1000);
+
   const m = Math.floor(elapsed / 60).toString().padStart(2, '0');
   const s = (elapsed % 60).toString().padStart(2, '0');
   document.getElementById('recording-timer').textContent = `REC ${m}:${s}`;
-
-  // Removed 15s limit as per user request — let them record!
 }
 
 function updateSizeProgress(bytes) {
@@ -1396,6 +1497,13 @@ function openExternalUrl(e) {
 function deleteLightboxPhoto(e) {
   if (e) e.stopPropagation();
   if (!state.lightboxPhoto) return;
+
+  document.getElementById('delete-modal-title').textContent = "Delete Photo?";
+  document.getElementById('delete-modal-text').textContent = "This will permanently remove this photo from the wedding gallery.";
+  const btn = document.getElementById('btn-confirm-delete');
+  btn.textContent = "Delete Forever";
+  btn.onclick = confirmDelete;
+
   document.getElementById('delete-modal').classList.remove('hidden');
 }
 

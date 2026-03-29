@@ -202,6 +202,23 @@
 
             <!-- Event label overlay -->
             <div class="event-overlay" id="event-overlay">
+                <!-- Recording timer now sits above context label -->
+                <div id="recording-indicator" class="recording-indicator">
+                    <div class="recording-dot"></div>
+                    <span id="recording-timer">REC 00:00</span>
+                    <div class="size-progress-wrap">
+                        <svg class="size-progress-svg" width="32" height="32">
+                            <circle class="size-progress-bg" cx="16" cy="16" r="14" />
+                            <circle id="size-progress-bar" class="size-progress-bar" cx="16" cy="16" r="14"
+                                style="stroke-dasharray: 88; stroke-dashoffset: 88;" />
+                        </svg>
+                        <div class="size-progress-icon">
+                            <span id="size-icon-cloud" class="material-symbols-rounded">cloud_upload</span>
+                            <span id="size-icon-phone" class="material-symbols-rounded hidden">phone_iphone</span>
+                        </div>
+                    </div>
+                </div>
+
                 <div class="event-label-small">CAPTURING FOR</div>
                 <div class="event-label-main" id="event-label-main">Retro</div>
             </div>
@@ -247,56 +264,54 @@
             </button>
         </div>
 
-
-
-        <!-- Recording timer moved to top -->
-        <div id="recording-indicator" class="recording-indicator">
-            <div class="recording-dot"></div>
-            <span id="recording-timer">REC 00:00</span>
-            <div class="size-progress-wrap">
-                <svg class="size-progress-svg" width="32" height="32">
-                    <circle class="size-progress-bg" cx="16" cy="16" r="14" />
-                    <circle id="size-progress-bar" class="size-progress-bar" cx="16" cy="16" r="14"
-                        style="stroke-dasharray: 88; stroke-dashoffset: 88;" />
-                </svg>
-                <div class="size-progress-icon">
-                    <span id="size-icon-cloud" class="material-symbols-rounded">cloud_upload</span>
-                    <span id="size-icon-phone" class="material-symbols-rounded hidden">phone_iphone</span>
-                </div>
-            </div>
-        </div>
-
         <!-- Capture Area Controls -->
+        <!-- Capture Area Controls (Single row to prevent event interruption) -->
         <div class="capture-wrap">
             <div class="capture-row">
-                <!-- Flash Button -->
-                <button class="side-action-btn" id="btn-flash" onclick="toggleFlash()" aria-label="Flash"
-                    style="display:none">
-                    <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
-                        <path d="M11 2L4 11h7l-2 7 9-10h-7l2-6z" stroke="currentColor" stroke-width="1.5"
-                            stroke-linejoin="round" />
-                    </svg>
-                </button>
+                <!-- Left Button: Flash / Discard -->
+                <div class="side-action-wrap">
+                    <button class="side-action-btn" id="btn-flash" onclick="toggleFlash()" aria-label="Flash"
+                        style="display:none">
+                        <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+                            <path d="M11 2L4 11h7l-2 7 9-10h-7l2-6z" stroke="currentColor" stroke-width="1.5"
+                                stroke-linejoin="round" />
+                        </svg>
+                    </button>
+                    <button class="side-action-btn discard-btn hidden" id="btn-discard-recording"
+                        onclick="discardRecording()" aria-label="Discard recording">
+                        <span class="material-symbols-rounded">delete</span>
+                    </button>
+                </div>
 
-                <!-- Main Capture Button -->
+                <!-- Main Shutter Button: Plus / Resume -->
                 <button class="capture-btn" id="capture-btn" aria-label="Capture">
-                    <svg width="42" height="42" viewBox="0 0 36 36" fill="none">
-                        <circle cx="18" cy="18" r="14" stroke="#fff" stroke-width="2" fill="none" opacity="0.3" />
-                        <path d="M18 11v4M18 21v4M11 18h4M21 18h4M13.8 13.8l2.2 2.2M20 20l2.2 2.2" stroke="#fff"
-                            stroke-width="2.5" stroke-linecap="round" />
-                    </svg>
+                    <div class="shutter-icon-normal">
+                        <svg width="42" height="42" viewBox="0 0 36 36" fill="none">
+                            <circle cx="18" cy="18" r="14" stroke="#fff" stroke-width="2" fill="none" opacity="0.3" />
+                            <path d="M18 11v4M18 21v4M11 18h4M21 18h4M13.8 13.8l2.2 2.2M20 20l2.2 2.2" stroke="#fff"
+                                stroke-width="2.5" stroke-linecap="round" />
+                        </svg>
+                    </div>
+                    <div class="shutter-icon-review hidden">
+                        <span class="material-symbols-rounded" style="font-size: 42px; color: #fff;">play_arrow</span>
+                    </div>
                 </button>
 
-
-                <!-- Flip Camera Button -->
-                <button class="side-action-btn" id="btn-flip" onclick="flipCamera()" aria-label="Flip camera">
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
-                        <path d="M20 7H4m0 0l3-3M4 7l3 3" stroke="currentColor" stroke-width="1.8"
-                            stroke-linecap="round" stroke-linejoin="round" />
-                        <path d="M4 17h16m0 0l-3 3m3-3l-3-3" stroke="currentColor" stroke-width="1.8"
-                            stroke-linecap="round" stroke-linejoin="round" />
-                    </svg>
-                </button>
+                <!-- Right Button: Flip / Save -->
+                <div class="side-action-wrap">
+                    <button class="side-action-btn" id="btn-flip" onclick="flipCamera()" aria-label="Flip camera">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+                            <path d="M20 7H4m0 0l3-3M4 7l3 3" stroke="currentColor" stroke-width="1.8"
+                                stroke-linecap="round" stroke-linejoin="round" />
+                            <path d="M4 17h16m0 0l-3 3m3-3l-3-3" stroke="currentColor" stroke-width="1.8"
+                                stroke-linecap="round" stroke-linejoin="round" />
+                        </svg>
+                    </button>
+                    <button class="side-action-btn save-btn hidden" id="btn-save-video"
+                        onclick="finishAndSaveRecording()" aria-label="Save recording">
+                        <span class="material-symbols-rounded">check</span>
+                    </button>
+                </div>
             </div>
         </div>
 
@@ -639,18 +654,19 @@
     </div>
     <!-- ============================
        DELETE CONFIRM MODAL
-  ============================= -->
+   ============================= -->
     <div id="delete-modal" class="modal hidden">
         <div class="modal-backdrop" onclick="closeDeleteModal()"></div>
         <div class="modal-content">
             <div class="modal-icon danger">
                 <span class="material-symbols-rounded">delete_forever</span>
             </div>
-            <h3 class="modal-title">Delete Photo?</h3>
-            <p class="modal-text">This will permanently remove this photo from the wedding gallery.</p>
+            <h3 class="modal-title" id="delete-modal-title">Delete Photo?</h3>
+            <p class="modal-text" id="delete-modal-text">This will permanently remove this photo from the wedding
+                gallery.</p>
             <div class="modal-actions">
                 <button class="btn-outline" onclick="closeDeleteModal()">Cancel</button>
-                <button class="btn-danger" id="btn-confirm-delete" onclick="confirmDelete()">Delete Forever</button>
+                <button class="btn-danger" id="btn-confirm-delete">Delete Forever</button>
             </div>
         </div>
     </div>
