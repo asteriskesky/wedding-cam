@@ -1307,15 +1307,6 @@ function initFirebase() {
     db = firebase.firestore();
     fbAuth = firebase.auth();
 
-    // Handle redirect result for mobile auth
-    fbAuth.getRedirectResult().catch(err => {
-      console.error('Redirect error:', err);
-      if (err.code !== 'auth/cancelled-query-params') {
-        showToast('Login failed — try again');
-      }
-    });
-
-    // Listen for auth state
     fbAuth.onAuthStateChanged(handleAuthStateChange);
   } catch (err) {
     console.error('Firebase init failed:', err);
@@ -1398,17 +1389,14 @@ async function handleAuthStateChange(user) {
 async function loginWithGoogle() {
   try {
     const provider = new firebase.auth.GoogleAuthProvider();
-    // Use redirect for mobile, popup for desktop
-    const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent) || (navigator.maxTouchPoints > 0);
-
-    if (isMobile) {
-      await fbAuth.signInWithRedirect(provider);
-    } else {
-      await fbAuth.signInWithPopup(provider);
-    }
+    // Always use popup — redirect causes a page reload which triggers
+    // double auth state changes and breaks the loading flow on mobile.
+    await fbAuth.signInWithPopup(provider);
   } catch (err) {
     console.error('Google login failed:', err);
-    showToast('Google login failed — try another method');
+    if (err.code !== 'auth/popup-closed-by-user' && err.code !== 'auth/cancelled-popup-request') {
+      showToast('Google login failed — try another method');
+    }
   }
 }
 
@@ -1500,23 +1488,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
 /* ── Show a subtle loading state while Firebase auth resolves ─ */
 function showLoadingScreen() {
-  const welcome = document.getElementById('screen-welcome');
-  if (!welcome) return;
-  welcome.style.opacity = '0.5';
-  welcome.style.pointerEvents = 'none';
-
-  // Safety net: restore after 3s even if Firebase is slow/fails
+  // step-greet starts hidden in HTML; nothing to block — just set a safety net
+  // to ensure the greet step is shown if Firebase is slow/fails.
   setTimeout(hideLoadingScreen, 3000);
 }
 
 function hideLoadingScreen() {
-  const welcome = document.getElementById('screen-welcome');
-  if (!welcome) return;
-
-  welcome.style.opacity = '';
-  welcome.style.pointerEvents = '';
-
-  // If no screen is active and no info is shown, default to greet
+  // If no screen is active and no welcome step is visible, show the greet step.
   if (!document.querySelector('.screen.active#screen-app') &&
     !document.querySelector('.welcome-step:not(.hidden)')) {
     showStep('step-greet');
