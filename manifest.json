@@ -1,24 +1,23 @@
 {
-  "name": "The Atelier — Wedding Memories",
-  "short_name": "The Atelier",
+  "name": "ZR — Wedding Memories",
+  "short_name": "ZR Wedding",
   "description": "Capture and share beautiful wedding moments — Retro, Mehendi, Nikah.",
   "start_url": "/",
   "display": "standalone",
   "orientation": "portrait",
-  "background_color": "#0F0E08",
-  "theme_color": "#C9A84C",
+  "background_color": "#FAF8F3",
+  "theme_color": "#B8942A",
   "icons": [
     {
-      "src": "assets/icon-192.png",
-      "sizes": "192x192",
-      "type": "image/png",
-      "purpose": "any maskable"
+      "src": "assets/logo.png",
+      "sizes": "640x640",
+      "type": "image/jpeg"
     },
     {
-      "src": "assets/icon-512.png",
-      "sizes": "512x512",
-      "type": "image/png",
-      "purpose": "any maskable"
+      "src": "assets/zr_logo.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
     }
   ],
   "categories": ["photography", "social"],

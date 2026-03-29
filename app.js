@@ -1308,40 +1308,11 @@ function initFirebase() {
     fbAuth = firebase.auth();
 
     fbAuth.onAuthStateChanged(handleAuthStateChange);
-
-    // On mobile, Google sign-in uses signInWithRedirect (popup is blocked by
-    // iOS WKWebView). After the redirect returns, pick up the result here.
-    // On desktop this resolves immediately with a null result — no side effects.
-    fbAuth.getRedirectResult().catch(err => {
-      if (err.code && err.code !== 'auth/popup-closed-by-user') {
-        console.error('Google redirect error:', err);
-        debugLog('Redirect Error: ' + err.code + ' - ' + err.message);
-        showToast('Google sign-in failed — please try again');
-      }
-    });
   } catch (err) {
     console.error('Firebase init failed:', err);
-    debugLog('Init Error: ' + err.message);
     fallbackToLocal();
   }
 }
-
-// ---- DEBUG TOOLS (REMOVABLE) ----
-function debugLog(msg) {
-  let logEl = document.getElementById('debug-log');
-  if (!logEl) {
-    logEl = document.createElement('div');
-    logEl.id = 'debug-log';
-    logEl.style.cssText = 'position:fixed;bottom:80px;left:10px;right:10px;background:rgba(0,0,0,0.8);color:#0f0;font-family:monospace;font-size:10px;padding:10px;z-index:9999;max-height:150px;overflow-y:auto;border-radius:8px;pointer-events:none;border:1px solid #0f0;';
-    document.body.appendChild(logEl);
-  }
-  const entry = document.createElement('div');
-  entry.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
-  logEl.appendChild(entry);
-  logEl.scrollTop = logEl.scrollHeight;
-  console.log('DEBUG:', msg);
-}
-// ---------------------------------
 
 
 function fallbackToLocal() {
@@ -1416,27 +1387,12 @@ async function handleAuthStateChange(user) {
 }
 
 // MULTI-PROVIDER AUTH
-
-// signInWithPopup is blocked in iOS standalone (PWA) mode — the WKWebView
-// silently kills window.open(). Use redirect on any mobile browser.
-function isMobileBrowser() {
-  return /Android|iPhone|iPad|iPod|CriOS|FxiOS/i.test(navigator.userAgent);
-}
-
 async function loginWithGoogle() {
-  debugLog('loginWithGoogle() triggered. isMobile: ' + isMobileBrowser());
   try {
     const provider = new firebase.auth.GoogleAuthProvider();
-    if (isMobileBrowser()) {
-      debugLog('Using signInWithRedirect...');
-      await fbAuth.signInWithRedirect(provider);
-    } else {
-      debugLog('Using signInWithPopup...');
-      await fbAuth.signInWithPopup(provider);
-    }
+    await fbAuth.signInWithPopup(provider);
   } catch (err) {
     console.error('Google login failed:', err);
-    debugLog('Auth Error: ' + err.code + ' - ' + err.message);
     if (err.code !== 'auth/popup-closed-by-user' && err.code !== 'auth/cancelled-popup-request') {
       showToast('Google login failed — try another method');
     }

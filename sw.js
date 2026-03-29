@@ -1,10 +1,13 @@
-const CACHE_NAME = 'atelier-v2';
+const CACHE_NAME = 'zr-wedding-v3';
 const CACHE_ASSETS = [
     '/',
     '/index.html',
     '/style.css',
     '/app.js',
     '/manifest.json',
+    '/assets/zr_logo.svg',
+    '/assets/zr_text.svg',
+    '/assets/wedding-background.jpeg',
     'https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400;1,600&family=Inter:wght@300;400;500;600&display=swap'
 ];
 
