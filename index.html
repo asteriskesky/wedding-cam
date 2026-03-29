@@ -28,18 +28,14 @@
 </head>
 
 <body>
-    <!-- ============================
-       GLOBAL PROGRESS BAR (top)
-  ============================= -->
+    <!-- GLOBAL PROGRESS BAR -->
     <div id="global-progress" class="progress-container hidden">
         <div id="progress-bar" class="progress-bar"></div>
         <div id="progress-label" class="progress-label">Preparing Moments...</div>
     </div>
 
 
-    <!-- ============================
-       SCREEN 1: WELCOME / ONBOARDING
-  ============================= -->
+    <!-- WELCOME SCREEN -->
     <div id="screen-welcome" class="screen active">
         <div class="welcome-bg"></div>
         <div class="welcome-overlay"></div>
@@ -148,9 +144,7 @@
         </div>
     </div>
 
-    <!-- ============================
-       SCREEN 2: CAMERA / MAIN APP
-  ============================= -->
+    <!-- MAIN APP SCREEN -->
     <div id="screen-app" class="screen hidden">
 
         <!-- Header -->
@@ -241,13 +235,15 @@
 
         <!-- Capture / Upload Button -->
         <div class="capture-wrap">
-            <button class="capture-btn" id="capture-btn" onclick="capturePhoto()" aria-label="Capture">
-                <svg width="36" height="36" viewBox="0 0 36 36" fill="none">
-                    <rect x="4" y="4" width="28" height="28" rx="6" stroke="#fff" stroke-width="1.5" fill="none" />
-                    <path d="M10 18 Q10 10 18 10 Q26 10 26 18 Q26 26 18 26 Q10 26 10 18Z" fill="#fff" opacity="0.2" />
-                    <path
-                        d="M18 10v4M18 22v4M10 18h4M22 18h4M12.9 12.9l2.8 2.8M20.3 20.3l2.8 2.8M12.9 23.1l2.8-2.8M20.3 15.7l2.8-2.8"
-                        stroke="#fff" stroke-width="1.5" stroke-linecap="round" />
+            <div id="recording-indicator" class="recording-indicator">
+                <div class="recording-dot"></div>
+                <span id="recording-timer">REC 00:00</span>
+            </div>
+            <button class="capture-btn" id="capture-btn" aria-label="Capture">
+                <svg width="42" height="42" viewBox="0 0 36 36" fill="none">
+                    <circle cx="18" cy="18" r="14" stroke="#fff" stroke-width="2" fill="none" opacity="0.3" />
+                    <path d="M18 11v4M18 21v4M11 18h4M21 18h4M13.8 13.8l2.2 2.2M20 20l2.2 2.2" stroke="#fff"
+                        stroke-width="2.5" stroke-linecap="round" />
                 </svg>
             </button>
 
@@ -278,9 +274,7 @@
         </nav>
     </div>
 
-    <!-- ============================
-       SCREEN 3: EXPLORE GALLERY
-  ============================= -->
+    <!-- EXPLORE GALLERY -->
     <div id="screen-explore" class="screen hidden">
         <header class="app-header explore-header">
             <button class="header-btn" onclick="closeExplore()" aria-label="Back">
@@ -314,7 +308,6 @@
                                 stroke-linecap="round" stroke-linejoin="round" style="opacity:0" />
                         </svg>
                     </span>
-                    <span class="select-all-label">Select All</span>
                 </button>
             </div>
         </header>
@@ -440,6 +433,7 @@
         </button>
         <div class="lightbox-inner" onclick="event.stopPropagation()">
             <img id="lightbox-img" src="" alt="" />
+            <video id="lightbox-video" class="hidden" controls playsinline></video>
             <div id="lightbox-external-placeholder" class="external-placeholder lightbox-version hidden"
                 onclick="openExternalUrl(event)">
                 <div class="external-placeholder-icon">

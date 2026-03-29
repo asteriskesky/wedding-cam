@@ -1,16 +1,4 @@
-/* ============================================================
-   APP.JS — Zawa & Rayyan's Wedding Photo App
-   ============================================================
-   BACKEND: Firebase (Firestore + Storage + Anonymous Auth)
-   - Set CONFIG.firebase.enabled = true and fill in credentials
-   - Firestore: /users/{uid}, /photos/{photoId}
-   - Storage:   /photos/{event}/{id}.jpg
-   - Fallback:  localStorage when Firebase is not configured
-   ============================================================ */
-
-/* ============================================================
-   CONFIG — Paste your Firebase project config here
-   ============================================================ */
+// Zawa & Rayyan's Wedding Photo App
 const CONFIG = {
   // ── Cloudinary: free image/video hosting (25 GB, no credit card) ───────
   cloudinary: {
@@ -36,9 +24,7 @@ const CONFIG = {
   },
 };
 
-/* ============================================================
-   UTILITIES
-   ============================================================ */
+// UTILITIES
 
 /**
  * Returns the default event based on the current date:
@@ -76,9 +62,7 @@ function getDeviceMeta() {
   };
 }
 
-/* ============================================================
-   FIREBASE REFERENCES (set after init)
-   ============================================================ */
+// FIREBASE REFERENCES
 let db = null;   // Firestore
 let fbAuth = null;   // Firebase Auth
 let currentUid = null;   // Logged-in anonymous UID
@@ -91,18 +75,21 @@ const LIMITS = {
   video: 100 * 1024 * 1024,  // 100MB Cloudinary limit
 };
 
-/* ============================================================
-   STATE
-   ============================================================ */
+// STATE
 let state = {
   guest: { name: '', avatar: '🌸' },
   mode: 'camera',            // 'camera' | 'gallery' | 'gallery-preview'
   activeEvent: getDefaultEvent(),
   cameraStream: null,
-  facingMode: 'environment',
+  facingMode: 'environment', // 'user' | 'environment'
   flashEnabled: false,
+  isRecording: false,
+  mediaRecorder: null,
+  recordedChunks: [],
+  recordingStartTime: null,
+  recordingTimer: null,
   photos: [],                // normalised [{id, srcUrl, guestName, guestAvatar, event, type, ts}]
-  exploreFilter: { event: 'all', guest: 'all', type: 'all', search: '' },
+  exploreFilter: { event: 'all', guest: 'all', type: 'all', search: '', myPhotosOnly: false },
   photoPage: 0,
   photosPerPage: 12,
   multiselect: false,
@@ -111,9 +98,7 @@ let state = {
   pendingBatch: [],
 };
 
-/* ============================================================
-   AVATAR PICKER
-   ============================================================ */
+// AVATAR PICKER
 const AVATARS = [
   '🌸', '💍', '🕊️', '✨', '🌹', '🎊', '💫', '👑', '🌺', '🌙',
   '🦋', '🍃', '🌷', '🪷', '❤️', '🌟', '🎉', '🥂', '🕌', '🌼',
@@ -140,9 +125,7 @@ function selectAvatar(emoji, btn) {
   state.guest.avatar = emoji;
 }
 
-/* ============================================================
-   ONBOARDING FLOW
-   ============================================================ */
+// ONBOARDING FLOW
 function showStep(id) {
   document.querySelectorAll('.welcome-step').forEach(s => s.classList.add('hidden'));
   const el = document.getElementById(id);
@@ -176,9 +159,7 @@ async function enterApp() {
   startCamera();
 }
 
-/* ============================================================
-   GUEST PERSISTENCE
-   ============================================================ */
+// GUEST PERSISTENCE
 
 // ── Local (fallback) ──────────────────────────────────────
 const GUEST_KEY = 'wedding_guest_v2';
@@ -224,9 +205,7 @@ async function updateLastSeen() {
   } catch { }
 }
 
-/* ============================================================
-   SCREEN MANAGEMENT
-   ============================================================ */
+// SCREEN MANAGEMENT
 function showScreen(id) {
   document.querySelectorAll('.screen').forEach(s => {
     s.classList.remove('active');
@@ -254,9 +233,7 @@ function resetUser() {
   // Note: Firebase UID is retained — they'll re-register with a new name but same UID
 }
 
-/* ============================================================
-   TAB MANAGEMENT
-   ============================================================ */
+// TAB MANAGEMENT
 function selectTab(event) {
   document.querySelectorAll('#tab-bar .tab').forEach(t => t.classList.remove('active'));
   const tabEl = document.getElementById(`tab-${event}`);
@@ -267,17 +244,17 @@ function selectTab(event) {
   if (state.mode === 'gallery-preview') setMode('camera');
 }
 
-/* ============================================================
-   CAMERA
-   ============================================================ */
+// CAMERA
 async function startCamera() {
   const video = document.getElementById('camera-feed');
   const placeholder = document.getElementById('camera-placeholder');
   try {
     if (state.cameraStream) state.cameraStream.getTracks().forEach(t => t.stop());
+
+    // Request BOTH video and audio for video capture support
     const stream = await navigator.mediaDevices.getUserMedia({
       video: { facingMode: state.facingMode, width: { ideal: 1920 }, height: { ideal: 1080 } },
-      audio: false,
+      audio: true, // Enable audio for videos
     });
     state.cameraStream = stream;
     video.srcObject = stream;
@@ -316,9 +293,7 @@ function toggleFlash() {
   }
 }
 
-/* ============================================================
-   MODE SWITCHING
-   ============================================================ */
+// MODE SWITCHING
 function setMode(mode) {
   state.mode = mode;
   const video = document.getElementById('camera-feed');
@@ -521,9 +496,7 @@ async function startBatchUpload() {
   }
 }
 
-/* ============================================================
-   CAPTURE
-   ============================================================ */
+// CAPTURE
 async function capturePhoto() {
   const btn = document.getElementById('capture-btn');
   btn.classList.add('flash');
@@ -553,9 +526,14 @@ async function capturePhoto() {
     return;
   }
 
+  processCapturedMedia(dataUrl, type, null); // Photos don't need direct blob for now as canvas is efficient
+}
+
+function processCapturedMedia(dataUrl, type, blob = null) {
   const photo = {
     id: `photo_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
     dataUrl,
+    blob, // Store the raw blob for direct upload if available
     guestName: state.guest.name,
     guestAvatar: state.guest.avatar,
     uid: currentUid,
@@ -565,19 +543,129 @@ async function capturePhoto() {
     uploadedAt: new Date().toISOString(),
   };
 
+  // For immediate local preview, use Blob URL if available, otherwise dataUrl
+  const localSrc = blob ? URL.createObjectURL(blob) : photo.dataUrl;
+
   // Optimistically add to local state for instant UI feedback
-  state.photos.unshift({ ...photo, srcUrl: photo.dataUrl });
+  state.photos.unshift({ ...photo, srcUrl: localSrc });
   if (!CONFIG.firebase.enabled) {
     savePhotosLocal();
     renderPhotoGrid();
   }
 
-  showToast(`✦ Captured for ${CONFIG.wedding.eventLabels[state.activeEvent]}!`);
+  showToast(`✦ ${type === 'video' ? 'Video' : 'Captured'} for ${CONFIG.wedding.eventLabels[state.activeEvent]}!`);
 
   // Upload to Firebase (async — UI already updated)
   if (CONFIG.firebase.enabled) {
     uploadPhotoToFirebase(photo);
   }
+}
+
+/* ── Video Recording Logic ── */
+let longPressTimer = null;
+const LONG_PRESS_DELAY = 450;
+
+function initCaptureHandlers() {
+  const btn = document.getElementById('capture-btn');
+  if (!btn) return;
+
+  const startTap = (e) => {
+    if (e.type === 'touchstart') e.preventDefault(); // prevent double firing
+    if (state.mode !== 'camera') {
+      capturePhoto(); // from gallery preview
+      return;
+    }
+
+    longPressTimer = setTimeout(() => {
+      startRecording();
+    }, LONG_PRESS_DELAY);
+  };
+
+  const endTap = (e) => {
+    if (longPressTimer) {
+      clearTimeout(longPressTimer);
+      longPressTimer = null;
+
+      if (state.isRecording) {
+        stopRecording();
+      } else {
+        capturePhoto();
+      }
+    }
+  };
+
+  btn.addEventListener('mousedown', startTap);
+  btn.addEventListener('touchstart', startTap, { passive: false });
+  btn.addEventListener('mouseup', endTap);
+  btn.addEventListener('mouseleave', endTap);
+  btn.addEventListener('touchend', endTap);
+}
+
+async function startRecording() {
+  if (!state.cameraStream || state.isRecording) return;
+
+  try {
+    state.recordedChunks = [];
+    const mimeType = MediaRecorder.isTypeSupported('video/webm;codecs=vp9')
+      ? 'video/webm;codecs=vp9'
+      : 'video/webm';
+
+    state.mediaRecorder = new MediaRecorder(state.cameraStream, { mimeType });
+
+    state.mediaRecorder.ondataavailable = (e) => {
+      if (e.data.size > 0) state.recordedChunks.push(e.data);
+    };
+
+    state.mediaRecorder.onstop = async () => {
+      const blob = new Blob(state.recordedChunks, { type: 'video/webm' });
+      // Pass the blob directly to avoid large base64 strings
+      processCapturedMedia(null, 'video', blob);
+    };
+
+    state.mediaRecorder.start();
+    state.isRecording = true;
+    state.recordingStartTime = Date.now();
+
+    // UI Updates
+    const btn = document.getElementById('capture-btn');
+    btn.classList.add('recording');
+    document.getElementById('recording-indicator').classList.add('active');
+
+    state.recordingTimer = setInterval(updateRecordingTimer, 1000);
+
+    // Vibration feedback on mobile
+    if ('vibrate' in navigator) navigator.vibrate(50);
+
+  } catch (err) {
+    console.error('Recording start failed:', err);
+    state.isRecording = false;
+  }
+}
+
+function stopRecording() {
+  if (!state.isRecording || !state.mediaRecorder) return;
+
+  state.mediaRecorder.stop();
+  state.isRecording = false;
+
+  clearInterval(state.recordingTimer);
+  document.getElementById('recording-timer').textContent = 'REC 00:00';
+
+  const btn = document.getElementById('capture-btn');
+  btn.classList.remove('recording');
+  document.getElementById('recording-indicator').classList.remove('active');
+
+  if ('vibrate' in navigator) navigator.vibrate([30, 30]);
+}
+
+function updateRecordingTimer() {
+  const elapsed = Math.floor((Date.now() - state.recordingStartTime) / 1000);
+  const m = Math.floor(elapsed / 60).toString().padStart(2, '0');
+  const s = (elapsed % 60).toString().padStart(2, '0');
+  document.getElementById('recording-timer').textContent = `REC ${m}:${s}`;
+
+  // Auto stop at 15s to prevent massive uploads (Cloudinary limit is 100MB for free, but let's be safe)
+  if (elapsed >= 15) stopRecording();
 }
 
 function flashScreen() {
@@ -593,9 +681,7 @@ function flashScreen() {
   setTimeout(() => flash.remove(), 300);
 }
 
-/* ============================================================
-   PHOTO UPLOAD — Cloudinary (image) + Firestore (metadata)
-   ============================================================ */
+// PHOTO UPLOAD
 async function uploadPhotoToFirebase(photo, silent = false) {
   if (!db || !currentUid) return;
   const originalId = photo.id;
@@ -603,11 +689,18 @@ async function uploadPhotoToFirebase(photo, silent = false) {
   try {
     if (!silent) showToast('⬆ Starting upload...');
 
-    // 1. Upload to Cloudinary via XHR for real-time progress
-    const blob = await (await fetch(photo.dataUrl)).blob();
+    // 1. Get the blob (direct or from dataUrl)
+    let blob = photo.blob;
+    if (!blob && photo.dataUrl) {
+      blob = await (await fetch(photo.dataUrl)).blob();
+    }
+
+    if (!blob) throw new Error('No media blob available');
+
     const cloudinaryData = await new Promise((resolve, reject) => {
       const formData = new FormData();
-      formData.append('file', blob, `${photo.id}.jpg`);
+      const ext = photo.type === 'video' ? 'webm' : 'jpg';
+      formData.append('file', blob, `${photo.id}.${ext}`);
       formData.append('upload_preset', CONFIG.cloudinary.uploadPreset);
       formData.append('folder', `wedding/${photo.event}`);
       formData.append('tags', [photo.event, photo.type, photo.guestName.replace(/\s+/g, '_')].join(','));
@@ -659,9 +752,7 @@ async function uploadPhotoToFirebase(photo, silent = false) {
   }
 }
 
-/* ============================================================
-   LOCAL STORAGE (fallback when Firebase is off)
-   ============================================================ */
+// LOCAL STORAGE
 const PHOTOS_KEY = 'wedding_photos_v2';
 
 function savePhotosLocal() {
@@ -683,9 +774,7 @@ function loadPhotosLocal() {
   } catch { state.photos = []; }
 }
 
-/* ============================================================
-   TOAST
-   ============================================================ */
+// TOAST
 let toastTimer = null;
 function showToast(msg) {
   const toast = document.getElementById('upload-toast');
@@ -695,9 +784,7 @@ function showToast(msg) {
   toastTimer = setTimeout(() => toast.classList.add('hidden'), 2800);
 }
 
-/* ============================================================
-   UPLOAD PROGRESS
-   ============================================================ */
+// UPLOAD PROGRESS
 let activeUploads = new Map();
 
 function updateGlobalProgress(id, progress) {
@@ -749,9 +836,7 @@ function updateGlobalProgress(id, progress) {
   }
 }
 
-/* ============================================================
-   EXPLORE GALLERY
-   ============================================================ */
+// EXPLORE GALLERY
 function showExplore() {
   document.querySelectorAll('#tab-bar .tab').forEach(t => t.classList.remove('active'));
   document.getElementById('tab-explore').classList.add('active');
@@ -980,9 +1065,7 @@ function loadMorePhotos() {
   renderPhotoGrid();
 }
 
-/* ============================================================
-   LIGHTBOX
-   ============================================================ */
+// LIGHTBOX
 function openLightbox(photo) {
   if (state.multiselect) { toggleSelectPhoto(photo.id); return; }
   state.lightboxPhoto = photo;
@@ -990,22 +1073,26 @@ function openLightbox(photo) {
   const isExt = photo.isExternal;
 
   const img = document.getElementById('lightbox-img');
+  const video = document.getElementById('lightbox-video');
   const extPlaceholder = document.getElementById('lightbox-external-placeholder');
   const extTypeLabel = document.getElementById('lightbox-external-type');
 
   if (isExt) {
     img.classList.add('hidden');
+    video.classList.add('hidden');
     extPlaceholder.classList.remove('hidden');
     extTypeLabel.textContent = `${photo.type === 'video' ? 'Video' : 'Photo'} File`;
-    // In external mode, the whole placeholder acts as a redirect trigger
+  } else if (photo.type === 'video') {
+    img.classList.add('hidden');
+    extPlaceholder.classList.add('hidden');
+    video.src = src;
+    video.classList.remove('hidden');
+    video.play().catch(() => { });
   } else {
     img.src = src;
     img.classList.remove('hidden');
+    video.classList.add('hidden');
     extPlaceholder.classList.add('hidden');
-    // For normal files, the image normally just is a static preview, but user wants redirect on middle-click?
-    // "in the middle, keep the current ux where clicking takes to that link."
-    // If it's NOT an external link, clicking the middle should probably NOT redirect to nowhere?
-    // User said "for such type of external link cards". So only for external.
   }
 
   // Click handled by openExternalUrl if isExt is true
@@ -1033,8 +1120,16 @@ function openLightbox(photo) {
   document.getElementById('lightbox').classList.remove('hidden');
 }
 
-function closeLightbox() {
-  document.getElementById('lightbox').classList.add('hidden');
+async function closeLightbox() {
+  const lightbox = document.getElementById('lightbox');
+  const video = document.getElementById('lightbox-video');
+
+  if (video) {
+    video.pause();
+    video.src = '';
+  }
+
+  lightbox.classList.add('hidden');
 }
 
 function downloadLightboxPhoto(e) {
@@ -1108,9 +1203,7 @@ async function deletePhoto(photoId) {
 
 
 
-/* ============================================================
-   MENU PANEL
-   ============================================================ */
+// BATCH UPLOAD MODAL
 function toggleMenu() {
   document.getElementById('menu-panel').classList.toggle('hidden');
 }
@@ -1205,9 +1298,7 @@ function downloadPhotoByUrl(url, filename) {
   });
 }
 
-/* ============================================================
-   FIREBASE INIT & AUTH
-   ============================================================ */
+// FIREBASE INIT
 function initFirebase() {
   if (!CONFIG.firebase.enabled) return;
 
@@ -1224,8 +1315,31 @@ function initFirebase() {
   }
 }
 
+function fallbackToLocal() {
+  hideLoadingScreen();
+  if (loadGuestLocal() && state.guest.name) {
+    updateHeaderAvatar();
+    loadPhotosLocal();
+    showScreen('screen-app');
+    selectTab(getDefaultEvent());
+    startCamera();
+  } else {
+    showStep('step-greet');
+  }
+}
+
 async function handleAuthStateChange(user) {
-  if (!user) return; // signInAnonymously() will trigger this again with a user
+  // Clear the loading block as soon as we have a result from Firebase
+  hideLoadingScreen();
+
+  if (!user) {
+    // If no user is logged in, and we're not already on the app screen,
+    // make sure the welcome greet step is shown.
+    if (!document.querySelector('.screen.active#screen-app')) {
+      showStep('step-greet');
+    }
+    return;
+  }
 
   currentUid = user.uid;
 
@@ -1272,9 +1386,7 @@ async function handleAuthStateChange(user) {
   }
 }
 
-/* ============================================================
-   MULTI-PROVIDER AUTH
-   ============================================================ */
+// MULTI-PROVIDER AUTH
 async function loginWithGoogle() {
   try {
     const provider = new firebase.auth.GoogleAuthProvider();
@@ -1341,9 +1453,7 @@ async function loginAnonymously() {
 
 
 
-/* ============================================================
-   INIT
-   ============================================================ */
+// INIT
 document.addEventListener('DOMContentLoaded', () => {
   if (CONFIG.firebase.enabled) {
     // Firebase path: auth state change drives the flow
@@ -1352,15 +1462,7 @@ document.addEventListener('DOMContentLoaded', () => {
     showLoadingScreen();
   } else {
     // Local-only path
-    if (loadGuestLocal() && state.guest.name) {
-      updateHeaderAvatar();
-      loadPhotosLocal();
-      showScreen('screen-app');
-      selectTab(getDefaultEvent());
-      startCamera();
-    } else {
-      showStep('step-greet');
-    }
+    fallbackToLocal();
   }
 
   // Keyboard shortcuts
@@ -1372,6 +1474,9 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
+  // Capture Button: Long-press for Video, Tap for Photo
+  initCaptureHandlers();
+
   // Prevent bounce scroll on iOS for non-scroll areas
   document.body.addEventListener('touchmove', e => {
     if (e.target.closest('.explore-content')) return;
@@ -1381,27 +1486,30 @@ document.addEventListener('DOMContentLoaded', () => {
 
 /* ── Show a subtle loading state while Firebase auth resolves ─ */
 function showLoadingScreen() {
-  // Show welcome screen but dim it slightly until auth resolves
-  // (auth usually resolves in < 500ms from cache)
   const welcome = document.getElementById('screen-welcome');
+  if (!welcome) return;
   welcome.style.opacity = '0.5';
   welcome.style.pointerEvents = 'none';
 
-  // Auth state change will call showStep() / showScreen() which removes this
-  // As a safety net, restore after 3s even if Firebase is slow
-  setTimeout(() => {
-    welcome.style.opacity = '';
-    welcome.style.pointerEvents = '';
-    if (!document.querySelector('.screen.active#screen-app') &&
-      !document.querySelector('.welcome-step:not(.hidden)')) {
-      showStep('step-auth-choice');
-    }
-  }, 3000);
+  // Safety net: restore after 3s even if Firebase is slow/fails
+  setTimeout(hideLoadingScreen, 3000);
 }
 
-/* ============================================================
-   SERVICE WORKER
-   ============================================================ */
+function hideLoadingScreen() {
+  const welcome = document.getElementById('screen-welcome');
+  if (!welcome) return;
+
+  welcome.style.opacity = '';
+  welcome.style.pointerEvents = '';
+
+  // If no screen is active and no info is shown, default to greet
+  if (!document.querySelector('.screen.active#screen-app') &&
+    !document.querySelector('.welcome-step:not(.hidden)')) {
+    showStep('step-greet');
+  }
+}
+
+// SERVICE WORKER
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
     navigator.serviceWorker.register('sw.js').catch(() => { });
