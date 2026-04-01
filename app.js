@@ -1733,7 +1733,9 @@ function downloadLightboxPhoto(e) {
     window.open(p.url, '_blank');
     return;
   }
-  downloadPhotoByUrl(p.srcUrl || p.dataUrl, `${p.event}_${p.guestName || 'guest'}_${p.id}.jpg`);
+  const ext = p.type === 'video' ? 'webm' : 'jpg';
+  showToast(`Downloading your media…`);
+  downloadPhotoByUrl(p.srcUrl || p.dataUrl, `${p.event}_${p.guestName || 'guest'}_${p.id}.${ext}`);
 }
 
 function openExternalUrl(e) {
@@ -1778,7 +1780,7 @@ async function confirmDelete() {
     // 2. Remove from Firestore
     if (db && currentUid) {
       await db.collection('photos').doc(p.id).delete();
-      showToast('Photo removed from gallery');
+      showToast('Moment removed from gallery');
     }
   } catch (err) {
     console.error('Delete failed:', err);
@@ -1871,30 +1873,56 @@ function clearSelection() {
 function updateSelectionUI() {
   const count = state.selectedIds.size;
   document.getElementById('sel-count').textContent =
-    count === 0 ? 'No photos selected' : `${count} photo${count > 1 ? 's' : ''} selected`;
+    count === 0 ? 'No moments selected' : `${count} moment${count > 1 ? 's' : ''} selected`;
   document.querySelectorAll('.photo-card').forEach(card => {
     card.classList.toggle('selected', state.selectedIds.has(card.dataset.id));
   });
 }
 
 async function downloadSelected() {
-  if (state.selectedIds.size === 0) { showToast('Select photos first'); return; }
+  if (state.selectedIds.size === 0) { showToast('Select moments first'); return; }
   const photos = state.photos.filter(p => state.selectedIds.has(p.id));
-  showToast(`Downloading ${photos.length} photo${photos.length > 1 ? 's' : ''}…`);
+  const msg = photos.length === 1 ? 'Downloading your media…' : `Downloading ${photos.length} moments…`;
+  showToast(msg);
   for (const p of photos) {
-    await downloadPhotoByUrl(p.srcUrl || p.dataUrl, `${p.event}_${p.guestName || 'guest'}.jpg`);
+    const ext = p.type === 'video' ? 'webm' : 'jpg';
+    await downloadPhotoByUrl(p.srcUrl || p.dataUrl, `${p.event}_${p.guestName || 'guest'}.${ext}`);
     await new Promise(r => setTimeout(r, 150));
   }
 }
 
-function downloadPhotoByUrl(url, filename) {
-  return new Promise(resolve => {
+async function downloadPhotoByUrl(url, filename) {
+  // Mobile Safari & some desktop versions of Safari ignore the 'download' attribute
+  // for cross-origin URLs (e.g. Cloudinary/Firebase).
+  // Using fetch + Blob URL ensures the file is same-origin, forcing a download.
+  try {
+    const res = await fetch(url);
+    if (!res.ok) throw new Error('Fetch failed');
+    const blob = await res.blob();
+    const blobUrl = URL.createObjectURL(blob);
+
     const a = document.createElement('a');
-    a.href = url; a.download = filename; a.style.display = 'none';
+    a.href = blobUrl;
+    a.download = filename;
+    a.style.display = 'none';
     document.body.appendChild(a);
     a.click();
-    setTimeout(() => { a.remove(); resolve(); }, 100);
-  });
+
+    // Small delay to ensure browser handles the download
+    setTimeout(() => {
+      URL.revokeObjectURL(blobUrl);
+      a.remove();
+    }, 200);
+  } catch (err) {
+    console.warn('Blob download failed, falling back to simple link click.', err);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    a.style.display = 'none';
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => a.remove(), 100);
+  }
 }
 
 // FIREBASE INIT
@@ -2133,13 +2161,17 @@ function hideLoadingScreen() {
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
     navigator.serviceWorker.register('sw.js').then(reg => {
+      // Force a check for new versions on every page load
+      reg.update();
+
       reg.onupdatefound = () => {
         const sw = reg.installing;
         if (sw) {
           sw.onstatechange = () => {
             if (sw.state === 'installed' && navigator.serviceWorker.controller) {
-              // New version available! Reload to apply.
-              window.location.reload();
+              // Show toast so reload isn't jarring
+              showToast('✦ Updating to latest version...');
+              setTimeout(() => window.location.reload(), 1500);
             }
           };
         }
