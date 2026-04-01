@@ -1,12 +1,10 @@
 // Zawa & Rayyan's Wedding Photo App
 const CONFIG = {
-  // ── Cloudinary: free image/video hosting (25 GB, no credit card) ───────
   cloudinary: {
     cloudName: 'dxfzmuldc',
     uploadPreset: 'wedding-cam',
   },
 
-  // ── Firebase: auth + Firestore metadata only (free Spark plan) ──────────
   firebase: {
     enabled: true,
     apiKey: 'AIzaSyDsvtADJaJVYGDBfcgraLGfTjWfoFRtIJA',
@@ -24,7 +22,7 @@ const CONFIG = {
   },
 };
 
-// ── INDEXED_DB (Ghost Backup) ──────────────────────────────
+// Ghost Backup
 const IDB_NAME = 'WeddingGhostBackup';
 const IDB_VERSION = 1;
 const STORE_NAME = 'media';
@@ -135,6 +133,51 @@ function getDefaultEvent() {
     if (date === 4) return 'nikah';
   }
   return 'retro';
+}
+
+/**
+ * Best supported video mime-type
+ */
+function getBestVideoMimeType() {
+  const types = [
+    'video/mp4;codecs=h264',
+    'video/mp4;codecs=avc1',
+    'video/mp4',
+    'video/webm;codecs=h264',
+    'video/webm;codecs=vp9',
+    'video/webm;codecs=vp8',
+    'video/webm'
+  ];
+  if (!window.MediaRecorder) return 'video/webm'; // Fallback
+  for (const t of types) {
+    if (MediaRecorder.isTypeSupported(t)) return t;
+  }
+  return 'video/webm'; // Final fallback
+}
+
+function getExtFromMimeType(mime) {
+  if (mime.includes('mp4')) return 'mp4';
+  if (mime.includes('webm')) return 'webm';
+  if (mime.includes('mov')) return 'mov';
+  if (mime.includes('quicktime')) return 'mov';
+  return 'webm';
+}
+
+function getExtFromUrl(url, type) {
+  if (!url) return type === 'video' ? 'mp4' : 'jpg';
+
+  // If it's a Cloudinary video, we want to force MP4 for universal compatibility
+  if (type === 'video' && url.includes('cloudinary')) return 'mp4';
+
+  // Try to find extension in URL (e.g. .../photo.mov)
+  const parts = url.split('?')[0].split('.');
+  if (parts.length > 1) {
+    const ext = parts.pop().toLowerCase();
+    if (['mov', 'mp4', 'webm', 'jpg', 'jpeg', 'png', 'heic'].includes(ext)) {
+      return ext;
+    }
+  }
+  return type === 'video' ? 'mp4' : 'jpg';
 }
 
 /**
@@ -696,6 +739,7 @@ async function startBatchUpload() {
     const photo = {
       id: `photo_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
       dataUrl,
+      blob: item.file, // Keep original file for upload
       guestName: state.guest.name,
       guestAvatar: state.guest.avatar,
       uid: currentUid,
@@ -703,7 +747,8 @@ async function startBatchUpload() {
       type: item.type,
       ts: Date.now(),
       externalUrl: externalLink,
-      isExternal: !!externalLink
+      isExternal: !!externalLink,
+      filename: item.file.name // To preserve extension
     };
 
     // Optimistically add to state for instant UI update behind modal
@@ -840,6 +885,7 @@ function processCapturedMedia(dataUrl, type, blob = null) {
     id: `photo_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
     dataUrl,
     blob, // Store the raw blob for direct upload if available
+    filename: blob ? (blob.name || `capture_${Date.now()}.${getExtFromMimeType(blob.type)}`) : null,
     guestName: state.guest.name,
     guestAvatar: state.guest.avatar,
     uid: currentUid,
@@ -871,7 +917,13 @@ function processCapturedMedia(dataUrl, type, blob = null) {
 
   // Auto-save to phone (if enabled in preferences)
   if (state.prefs.autosave) {
-    const filename = `${state.activeEvent}_${state.guest.name || 'guest'}_${photo.id}.${type === 'video' ? 'webm' : 'jpg'}`;
+    let ext = type === 'video' ? 'webm' : 'jpg';
+    if (photo.filename) {
+      ext = photo.filename.split('.').pop().toLowerCase();
+    } else if (blob && blob.type) {
+      ext = getExtFromMimeType(blob.type);
+    }
+    const filename = `${state.activeEvent}_${state.guest.name || 'guest'}_${photo.id}.${ext}`;
     downloadPhotoByUrl(localSrc, filename);
   }
 }
@@ -987,8 +1039,8 @@ async function startRecording() {
       streamToRecord = state.cameraStream;
     }
 
-    // Use default to let browser choose best supported webm profile
-    const mimeType = 'video/webm';
+    // Use smart detection to let browser choose best supported profile
+    const mimeType = getBestVideoMimeType();
 
     state.mediaRecorder = new MediaRecorder(streamToRecord, { mimeType });
 
@@ -1001,7 +1053,7 @@ async function startRecording() {
     };
 
     state.mediaRecorder.onstop = async () => {
-      const blob = new Blob(state.recordedChunks, { type: 'video/webm' });
+      const blob = new Blob(state.recordedChunks, { type: state.mediaRecorder.mimeType || mimeType });
       document.body.classList.remove('is-reviewing');
       document.getElementById('capture-btn').classList.remove('recording');
       state.isPaused = false;
@@ -1164,7 +1216,8 @@ function triggerLocalSave(blob) {
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = `wedding_video_large_${Date.now()}.webm`;
+  const ext = getExtFromMimeType(blob.type);
+  a.download = `wedding_video_large_${Date.now()}.${ext}`;
   document.body.appendChild(a);
   a.click();
   setTimeout(() => {
@@ -1229,7 +1282,12 @@ async function uploadPhotoToFirebase(photo, silent = false) {
 
     const cloudinaryData = await new Promise((resolve, reject) => {
       const formData = new FormData();
-      const ext = photo.type === 'video' ? 'webm' : 'jpg';
+      let ext = photo.type === 'video' ? 'webm' : 'jpg';
+      if (photo.filename) {
+        ext = photo.filename.split('.').pop().toLowerCase();
+      } else if (blob && blob.type) {
+        ext = getExtFromMimeType(blob.type);
+      }
       formData.append('file', blob, `${photo.id}.${ext}`);
       formData.append('upload_preset', CONFIG.cloudinary.uploadPreset);
       formData.append('folder', `wedding/${photo.event}`);
@@ -1265,6 +1323,7 @@ async function uploadPhotoToFirebase(photo, silent = false) {
     await db.collection('photos').doc(photo.id).set({
       url: photo.externalUrl || url,
       srcUrl: url, // Thumbnail/Preview image
+      filename: photo.filename || null,
       guestName: photo.guestName,
       guestAvatar: photo.guestAvatar,
       uid: currentUid,
@@ -1473,6 +1532,7 @@ function subscribeToPhotos(onFirstLoad) {
           event: d.event || 'retro',
           type: d.type || 'photo',
           isExternal: d.isExternal || false,
+          filename: d.filename || null,
           ts: d.ts || 0,
         };
       });
@@ -1733,9 +1793,32 @@ function downloadLightboxPhoto(e) {
     window.open(p.url, '_blank');
     return;
   }
-  const ext = p.type === 'video' ? 'webm' : 'jpg';
+  const ext = p.filename
+    ? p.filename.split('.').pop().toLowerCase()
+    : getExtFromUrl(p.srcUrl || p.dataUrl, p.type);
+
+  const finalExt = p.type === 'video' ? 'mp4' : ext;
+  const eventPhotos = state.photos.filter(ph => ph.event === p.event).reverse();
+  const index = eventPhotos.indexOf(p) + 1 || Date.now();
+  const filename = `${p.event}_${index}.${finalExt}`;
+
   showToast(`Downloading your media…`);
-  downloadPhotoByUrl(p.srcUrl || p.dataUrl, `${p.event}_${p.guestName || 'guest'}_${p.id}.${ext}`);
+  let downloadUrl = p.srcUrl || p.dataUrl;
+
+  // Force MP4 transcoding
+  if (p.type === 'video' && downloadUrl.includes('cloudinary')) {
+    const urlParts = downloadUrl.split('/upload/');
+    if (urlParts.length === 2) {
+      downloadUrl = `${urlParts[0]}/upload/q_auto:best,vc_h264:high/${urlParts[1]}`;
+    }
+    const baseParts = downloadUrl.split('?');
+    baseParts[0] = baseParts[0].includes('.')
+      ? baseParts[0].replace(/\.[^/.]+$/, '.mp4')
+      : baseParts[0] + '.mp4';
+    downloadUrl = baseParts.join('?');
+  }
+
+  downloadPhotoByUrl(downloadUrl, filename);
 }
 
 function openExternalUrl(e) {
@@ -1885,16 +1968,36 @@ async function downloadSelected() {
   const msg = photos.length === 1 ? 'Downloading your media…' : `Downloading ${photos.length} moments…`;
   showToast(msg);
   for (const p of photos) {
-    const ext = p.type === 'video' ? 'webm' : 'jpg';
-    await downloadPhotoByUrl(p.srcUrl || p.dataUrl, `${p.event}_${p.guestName || 'guest'}.${ext}`);
+    const ext = p.filename
+      ? p.filename.split('.').pop().toLowerCase()
+      : getExtFromUrl(p.srcUrl || p.dataUrl, p.type);
+
+    // Force MP4 for all video downloads for consistency
+    const finalExt = p.type === 'video' ? 'mp4' : ext;
+    let downloadUrl = p.srcUrl || p.dataUrl;
+
+    if (p.type === 'video' && downloadUrl.includes('cloudinary')) {
+      const urlParts = downloadUrl.split('/upload/');
+      if (urlParts.length === 2) {
+        downloadUrl = `${urlParts[0]}/upload/q_auto:best,vc_h264:high/${urlParts[1]}`;
+      }
+      const baseParts = downloadUrl.split('?');
+      baseParts[0] = baseParts[0].includes('.')
+        ? baseParts[0].replace(/\.[^/.]+$/, '.mp4')
+        : baseParts[0] + '.mp4';
+      downloadUrl = baseParts.join('?');
+    }
+
+    const eventPhotos = state.photos.filter(ph => ph.event === p.event).reverse();
+    const index = eventPhotos.indexOf(p) + 1 || Date.now();
+    const filename = `${p.event}_${index}.${finalExt}`;
+
+    await downloadPhotoByUrl(downloadUrl, filename);
     await new Promise(r => setTimeout(r, 150));
   }
 }
 
 async function downloadPhotoByUrl(url, filename) {
-  // Mobile Safari & some desktop versions of Safari ignore the 'download' attribute
-  // for cross-origin URLs (e.g. Cloudinary/Firebase).
-  // Using fetch + Blob URL ensures the file is same-origin, forcing a download.
   try {
     const res = await fetch(url);
     if (!res.ok) throw new Error('Fetch failed');
@@ -1908,7 +2011,7 @@ async function downloadPhotoByUrl(url, filename) {
     document.body.appendChild(a);
     a.click();
 
-    // Small delay to ensure browser handles the download
+    // Small delay for cleanup
     setTimeout(() => {
       URL.revokeObjectURL(blobUrl);
       a.remove();

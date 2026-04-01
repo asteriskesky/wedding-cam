@@ -1,5 +1,5 @@
 {
-  "name": "ZR — Wedding Memories",
+  "name": "Zawa & Rayyan — Wedding Memories",
   "short_name": "ZR Wedding",
   "description": "Capture and share beautiful wedding moments — Retro, Mehendi, Nikah.",
   "start_url": "/",
@@ -20,6 +20,9 @@
       "purpose": "any"
     }
   ],
-  "categories": ["photography", "social"],
+  "categories": [
+    "photography",
+    "social"
+  ],
   "lang": "en"
 }

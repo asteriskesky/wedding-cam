@@ -1,4 +1,4 @@
-const CACHE_NAME = 'zr-wedding-v5';
+const CACHE_NAME = 'zr-wedding-v9';
 const CACHE_ASSETS = [
     '/',
     '/index.html',

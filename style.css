@@ -1345,24 +1345,19 @@ body.is-reviewing #capture-btn {
 /* PHOTO GRID */
 .photo-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 3px;
-  padding: 3px 0 4px;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 2px;
+  padding: 0 0 4px;
   background: var(--bg3);
 }
 
 .photo-card {
   aspect-ratio: 1;
+  /* All squares */
   position: relative;
   overflow: hidden;
   cursor: pointer;
   background: var(--bg3);
-}
-
-.photo-card:first-child,
-.photo-card:nth-child(5n) {
-  grid-column: span 2;
-  aspect-ratio: 16/9;
 }
 
 .photo-card img,
